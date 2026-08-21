@@ -39,6 +39,8 @@ REQUIRED_LEAGUE_KEYS = ("league_id", "name", "num_teams", "starters", "bench", "
 DEFAULT_BENCH_SPOTS = 8
 SEASON = "2026"
 SYNC_INTERVAL = "15s"  # how often auto-sync polls the Sleeper draft
+SYNC_INTERVAL_NEAR_TURN = "5s"  # within NEAR_TURN_PICKS of my turn, poll faster
+NEAR_TURN_PICKS = 2
 FEED_CACHE_SECONDS = 1800  # projections refresh twice an hour; a rebuild takes ~4 s
 SYNC_STALE_SECONDS = 45  # heartbeat turns orange when the last sync is older than this
 SYNC_MIN_GAP_SECONDS = 5  # a rerun right after a sync does not sync again
@@ -833,8 +835,10 @@ if mode == "Draft":
             )
 
         if auto_sync:
+            near_turn = next_pick is not None and next_pick["picks_until_mine"] <= NEAR_TURN_PICKS
+            poll_every = SYNC_INTERVAL_NEAR_TURN if near_turn else SYNC_INTERVAL
 
-            @st.fragment(run_every=SYNC_INTERVAL)
+            @st.fragment(run_every=poll_every)
             def auto_sync_fragment():
                 # Runs every SYNC_INTERVAL and inline on every full rerun. The heartbeat
                 # lives in here so it redraws on each poll, not just on full reruns.
@@ -1139,26 +1143,46 @@ if mode == "Draft":
             return True
         return False
 
+    # Tier bookkeeping over everything still available (not just the visible rows)
+    tier_field = "global_tier" if st.session_state.pos_filter == "All" else "tier"
+    tier_pool = available if st.session_state.pos_filter == "All" else [
+        p for p in available if p["position"] == st.session_state.pos_filter
+    ]
+    left_in_tier = Counter(p.get(tier_field) for p in tier_pool)
+    best_vor_in_tier = {}
+    for p in tier_pool:
+        t = p.get(tier_field)
+        best_vor_in_tier[t] = max(best_vor_in_tier.get(t, float("-inf")), p["vor"])
+    rows = shown[:TOP_N]
+
     last_tier = None
-    for i, p in enumerate(shown[:TOP_N], start=1):
+    for i, p in enumerate(rows, start=1):
+        this_tier = p.get(tier_field)
         if st.session_state.pos_filter == "All":
-            this_tier = p.get("global_tier")
             tier_label = f"Tier {this_tier}"
         else:
-            this_tier = p.get("tier")
             tier_label = f"{st.session_state.pos_filter} · Tier {this_tier}"
 
         if sort_by == "VOR" and this_tier != last_tier:
+            n_left = left_in_tier.get(this_tier, 0)
+            next_best = best_vor_in_tier.get((this_tier or 0) + 1)
+            drop = f" · next tier −{p['vor'] - next_best:.0f} VOR" if next_best is not None else ""
             st.markdown(
                 f"<div style='color:#00e0a4;font-size:0.72rem;letter-spacing:2px;"
                 f"text-transform:uppercase;border-bottom:1px solid #1f2a3a;"
-                f"margin:10px 0 4px;padding-bottom:4px;'>{tier_label}</div>",
+                f"margin:10px 0 4px;padding-bottom:4px;'>{tier_label} · {n_left} left{drop}</div>",
                 unsafe_allow_html=True,
             )
             last_tier = this_tier
+        is_last_in_tier = (
+            sort_by == "VOR"
+            and left_in_tier.get(this_tier, 0) >= 1
+            and (i == len(rows) or rows[i].get(tier_field) != this_tier)
+            and left_in_tier.get(this_tier, 0) == sum(1 for r in rows[:i] if r.get(tier_field) == this_tier)
+        )
 
         key = player_key(p)
-        c = st.columns([0.5, 3.2, 1.3, 1.8, 1, 1], vertical_alignment="center")
+        c = st.columns([0.4, 3.0, 1.9, 1.9, 0.9, 0.9], vertical_alignment="center")
         c[0].markdown(f"<span class='rank-num'>{i:>2}</span>", unsafe_allow_html=True)
         stack_tag = ""
         if is_stack(p):
@@ -1179,34 +1203,40 @@ if mode == "Draft":
                 f"<span class='rank-num'>{p['team']}</span>",
                 unsafe_allow_html=True,
             )
+        last_chip = (
+            " <span class='badge' style='background:#fb923c22;color:#fb923c;border:1px solid #fb923c55'>LAST IN TIER</span>"
+            if is_last_in_tier
+            else ""
+        )
         c[2].markdown(
-            badge(p["position"], p.get("tier", "")) + status_badge(p) + news_badge(p),
+            badge(p["position"], p.get("tier", "")) + last_chip + status_badge(p) + news_badge(p),
             unsafe_allow_html=True,
         )
-        bye_txt = f" · Bye {p['bye']}" if p.get("bye") else ""
+        # Line 1: value and the odds he is there at your next turn. Line 2: byes and market ranks.
+        survive = ""
         if p.get("adp") and p["position"] not in LATE_ONLY_POSITIONS:
-            bye_txt += f" · {survival_probability(p['adp'], picks_made, panel_gap):.0%} back"
-        ranks_txt = ""
-        if p.get("sleeper_rank"):
-            ranks_txt += f" · Sleeper #{p['sleeper_rank']}"
-        if p.get("espn_rank"):
-            ranks_txt += f" · ESPN #{p['espn_rank']}"
-        if p.get("berry_rank"):
-            ranks_txt += f" · Berry #{p['berry_rank']}"
+            odds = survival_probability(p["adp"], picks_made, panel_gap)
+            color = "#f87171" if odds < 0.35 else ("#fbbf24" if odds < 0.65 else "#9aa4b2")
+            survive = f" <span style='color:{color};font-size:0.75rem' title='Odds he is still there at your next turn'>{odds:.0%} back</span>"
         split = ""
         if p.get("disagreement"):
-            split = (
-                f" <span style='color:#fbbf24;font-size:0.7rem'>"
-                f"⚡ SPLIT ({p.get('rank_spread')})</span>"
-            )
+            split += f" <span style='color:#fbbf24;font-size:0.7rem'>⚡ SPLIT ({p.get('rank_spread')})</span>"
         if sources_disagree(p):
             split += (
-                f" <span style='color:#e879f9;font-size:0.7rem'>📊"
-                f"{source_txt(p).replace(' (', ' ').rstrip(')')}</span>"
+                f" <span style='color:#e879f9;font-size:0.7rem' title='{source_txt(p).strip(' ()')}'>📊 sources split</span>"
             )
+        detail = []
+        if p.get("bye"):
+            detail.append(f"Bye {p['bye']}")
+        if sort_by != "VOR" and p.get("sleeper_rank"):
+            detail.append(f"Board #{p['sleeper_rank']}")
+        if p.get("espn_rank"):
+            detail.append(f"ESPN {p['espn_rank']}")
+        if p.get("berry_rank"):
+            detail.append(f"Berry {p['berry_rank']}")
         c[3].markdown(
-            f"<span class='mono'>{p['points']} / {p['vor']}"
-            f"<span class='rank-num'>{bye_txt}{ranks_txt}</span></span>{split}",
+            f"<span class='mono'>VOR {p['vor']} · {p['points']}</span>{survive}{split}"
+            f"<br><span class='rank-num'>{' · '.join(detail)}</span>",
             unsafe_allow_html=True,
         )
         c[4].button(
