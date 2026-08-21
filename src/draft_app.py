@@ -21,6 +21,7 @@ from recommend import (
     survival_probability,
 )
 from pick_sync import apply_picks, index_board_by_player_id, next_pick_info
+from espn_ranks import match_key
 import sleeper_league
 from sleeper_league import SleeperError
 from scoring import PRESET_FALLBACK_POSITIONS, scoring_summary, unprojected_bonus_keys
@@ -247,9 +248,22 @@ def draft_player(p, mine):
     st.session_state.drafted = st.session_state.drafted | {player_key(p)}
     if mine:
         st.session_state.my_roster = st.session_state.my_roster + [p]
+    st.session_state.last_mark = {"key": player_key(p), "name": p["name"], "mine": mine}
+
+
+def undo_last_mark():
+    mark = st.session_state.pop("last_mark", None)
+    if not mark:
+        return
+    st.session_state.drafted = st.session_state.drafted - {mark["key"]}
+    st.session_state.my_roster = [
+        p for p in st.session_state.my_roster if player_key(p) != mark["key"]
+    ]
+    st.session_state.quick_msg = f"↩ Undid: {mark['name']}"
 
 
 def reset_draft():
+    st.session_state.pop("last_mark", None)
     st.session_state.drafted = set()
     st.session_state.my_roster = []
     st.session_state.synced_taken = set()
@@ -386,6 +400,15 @@ def sync_picks_from_sleeper():
         "picks": len(picks),
         "next": next_pick_info(draft, len(picks), league["user_id"]),
         "unmatched": len(result.unmatched),
+        "unmatched_names": [
+            {
+                "name": f"{(pk.get('metadata') or {}).get('first_name', '')} "
+                        f"{(pk.get('metadata') or {}).get('last_name', '')}".strip() or "Unknown",
+                "position": (pk.get("metadata") or {}).get("position") or "?",
+                "team": (pk.get("metadata") or {}).get("team") or "FA",
+            }
+            for pk in result.unmatched[:8]
+        ],
     }
     changed = (
         new_taken != st.session_state.synced_taken
@@ -439,7 +462,9 @@ with st.sidebar:
         )
         if league.get("is_dynasty"):
             st.caption("Dynasty league: this board only values the 2026 season.")
-        st.button("Disconnect", on_click=forget_league, use_container_width=True)
+        with st.popover("Disconnect", use_container_width=True):
+            st.caption("Forget this league and its saved connection?")
+            st.button("Yes, disconnect", on_click=forget_league, type="primary")
     else:
         username = st.text_input(
             "Sleeper username",
@@ -653,7 +678,9 @@ with st.sidebar:
         )
 
         st.divider()
-        st.button("Reset draft", on_click=reset_draft, use_container_width=True)
+        with st.popover("Reset draft", use_container_width=True):
+            st.caption("Clear every mark and synced pick? Sync picks will rebuild from Sleeper.")
+            st.button("Yes, reset", on_click=reset_draft, type="primary")
 
 
 # ==================== HEADER ====================
@@ -832,59 +859,84 @@ if mode == "Draft":
             f"<div class='rec-meta'>{reason} · PROJ {pick['points']}{source_txt(pick)} · VOR {pick['vor']}</div></div>",
             unsafe_allow_html=True,
         )
-        # ---- Quick Entry (fast pick marking for live drafts) ----
+    # ---- Quick Entry (fast pick marking for live drafts) ----
     st.markdown("<div class='sec-head'>Quick Entry</div>", unsafe_allow_html=True)
-    qcol1, qcol2, qcol3 = st.columns([3, 1, 1])
-    with qcol1:
-        quick_name = st.text_input(
-            "Quick mark",
-            label_visibility="collapsed",
-            placeholder="Type a player name…",
-            key="quick_entry",
-        )
 
     def quick_mark(mine):
-        typed = st.session_state.quick_entry.strip().lower()
+        typed = (st.session_state.get("quick_entry") or "").strip().lower()
+        st.session_state.quick_matches = []
         if not typed:
             return
-        # Find undrafted players whose name contains what you typed
         matches = [p for p in available if typed in p["name"].lower()]
         if len(matches) == 1:
             draft_player(matches[0], mine)
             st.session_state.quick_msg = (
                 f"✓ {'Drafted' if mine else 'Marked taken'}: {matches[0]['name']}"
             )
-            st.session_state.quick_entry = ""
-        elif len(matches) == 0:
-            st.session_state.quick_msg = f"⚠️ No match for '{typed}'"
-        else:
-            names = ", ".join(m["name"] for m in matches[:5])
+        elif not matches:
+            gone = [p for p in board if typed in p["name"].lower()]
             st.session_state.quick_msg = (
-                f"⚠️ Multiple matches — be more specific: {names}"
+                f"⚠️ {gone[0]['name']} is already off the board" if gone else f"⚠️ No match for '{typed}'"
             )
+        else:
+            st.session_state.quick_matches = matches[:5]
+            st.session_state.quick_msg = "Which one?"
 
-    qcol2.button(
-        "Mine",
-        key="quick_mine",
-        on_click=quick_mark,
-        args=(True,),
-        type="primary",
-        use_container_width=True,
-    )
-    qcol3.button(
-        "Taken",
-        key="quick_taken",
-        on_click=quick_mark,
-        args=(False,),
-        use_container_width=True,
-    )
+    with st.form("quick_entry_form", clear_on_submit=True, border=False):
+        qcol1, qcol2, qcol3 = st.columns([3, 1, 1])
+        qcol1.text_input(
+            "Quick mark",
+            label_visibility="collapsed",
+            placeholder="Type a player name, Enter = Taken",
+            key="quick_entry",
+        )
+        # First submit button is what Enter triggers: Taken is the 11-of-12 case
+        qcol2.form_submit_button("Taken", key="quick_taken", on_click=quick_mark, args=(False,), use_container_width=True)
+        qcol3.form_submit_button("Mine", key="quick_mine", on_click=quick_mark, args=(True,), type="primary", use_container_width=True)
 
+    for i, m in enumerate(st.session_state.get("quick_matches") or []):
+        mc = st.columns([3, 1, 1])
+        mc[0].markdown(
+            f"{badge(m['position'])} <span style='color:#ffffff'>{m['name']}</span> "
+            f"<span class='rank-num'>{m['team']}</span>",
+            unsafe_allow_html=True,
+        )
+        mc[1].button("Taken", key=f"pick_taken_{i}", on_click=lambda m=m: (draft_player(m, False), st.session_state.update(quick_matches=[], quick_msg=f"✓ Marked taken: {m['name']}")), use_container_width=True)
+        mc[2].button("Mine", key=f"pick_mine_{i}", type="primary", on_click=lambda m=m: (draft_player(m, True), st.session_state.update(quick_matches=[], quick_msg=f"✓ Drafted: {m['name']}")), use_container_width=True)
+
+    msg_col, undo_col = st.columns([4, 1])
     if st.session_state.get("quick_msg"):
-        color = "#34d399" if st.session_state.quick_msg.startswith("✓") else "#fb923c"
-        st.markdown(
+        color = "#34d399" if st.session_state.quick_msg.startswith(("✓", "↩")) else "#fb923c"
+        msg_col.markdown(
             f"<span style='color:{color};font-size:0.85rem'>{st.session_state.quick_msg}</span>",
             unsafe_allow_html=True,
         )
+    if st.session_state.get("last_mark"):
+        undo_col.button(
+            f"↩ Undo {st.session_state.last_mark['name'].split()[-1]}",
+            on_click=undo_last_mark,
+            use_container_width=True,
+        )
+
+    # ---- Unmatched Sleeper picks ----
+    unmatched_names = (st.session_state.draft_info or {}).get("unmatched_names") or []
+    still_unmatched = [u for u in unmatched_names if f"{u['name']}|{u['team']}|{u['position']}" not in drafted_keys]
+    if still_unmatched:
+        st.markdown(
+            "<span class='rank-num'>Sleeper picks not on the board (mark them so they drop out of recommendations):</span>",
+            unsafe_allow_html=True,
+        )
+        ucols = st.columns(min(4, len(still_unmatched)))
+        for i, u in enumerate(still_unmatched):
+            synthetic = {"name": u["name"], "team": u["team"], "position": u["position"]}
+            on_board = next((p for p in board if match_key(p["name"], p["position"]) == match_key(u["name"], u["position"])), None)
+            ucols[i % len(ucols)].button(
+                f"Taken: {u['name']} ({u['position']})",
+                key=f"unmatched_{i}",
+                on_click=draft_player,
+                args=(on_board or synthetic, False),
+                use_container_width=True,
+            )
 
     # ---- Cost of waiting ----
     st.markdown(
