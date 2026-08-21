@@ -86,6 +86,13 @@ html, body, [class*="css"] { font-family: 'Chakra Petch', sans-serif; }
 .rec-panel { padding:4px 0 2px; }
 [data-testid="stVerticalBlockBorderWrapper"] { border:1px solid rgba(0,224,164,0.35) !important; border-left:4px solid #00e0a4 !important; border-radius:12px !important; background:linear-gradient(90deg, rgba(0,224,164,0.10), rgba(0,224,164,0.01)); }
 .status-line { color:#9aa4b2; font-family:'JetBrains Mono',monospace; font-size:0.85rem; }
+/* Streamlit pads the main column ~6rem for its header; keep only what the collapse chevron needs */
+.block-container { padding-top:2.2rem !important; padding-bottom:2rem !important; }
+[data-testid="stSidebarUserContent"] { padding-top:1.5rem !important; }
+.cc-title { margin-top:0; }
+/* the width probe is an invisible component; give it no height */
+iframe[title="streamlit_js_eval.streamlit_js_eval"] { height:0 !important; min-height:0 !important; display:block; }
+[data-testid="stElementContainer"]:has(> iframe[title="streamlit_js_eval.streamlit_js_eval"]) { margin:0 !important; padding:0 !important; height:0 !important; }
 .status-line b { color:#e6edf3; font-weight:600; }
 .rec-label { color:#00e0a4; letter-spacing:3px; font-size:0.72rem; text-transform:uppercase; margin-bottom:4px; }
 .rec-name { font-size:1.5rem; font-weight:700; color:#f0f6fc; }
