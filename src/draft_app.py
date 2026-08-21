@@ -292,7 +292,7 @@ def source_txt(p):
 def persist_marks():
     """Manual marks survive a refresh; keyed to the draft so a new draft starts clean."""
     league = st.session_state.get("league") or {}
-    draft_id = league.get("draft_id") or "manual"
+    draft_id = st.session_state.get("rehearsal_draft_id") or league.get("draft_id") or "manual"
     try:
         save_state(
             STATE_FILE,
@@ -473,24 +473,36 @@ allocation = allocate_slots(my_roster, starters)
 needs = allocation.needs
 
 
-total_picks = sum(starters.values()) + bench_spots
+
+
+def active_draft_id():
+    """The league's draft, or a mock draft the owner is rehearsing with."""
+    return st.session_state.get("rehearsal_draft_id") or league["draft_id"]
 
 
 def sync_picks_from_sleeper():
     """Mark every pick from the live Sleeper draft. Returns True if anything changed."""
-    draft = sleeper_league.get_draft(league["draft_id"])
-    picks = sleeper_league.get_draft_picks(league["draft_id"])
-    if "my_roster_id" not in st.session_state:
-        rosters = sleeper_league.get_rosters(league["league_id"])
-        st.session_state.my_roster_id = sleeper_league.my_roster_id(rosters, league["user_id"])
-    result = apply_picks(picks, board_by_id, league["user_id"], st.session_state.my_roster_id)
+    draft_id = active_draft_id()
+    draft = sleeper_league.get_draft(draft_id)
+    picks = sleeper_league.get_draft_picks(draft_id)
+    # Who I am in this draft: the published order is authoritative (and the only
+    # option in a mock draft); league rosters are the fallback before it is published.
+    roster_id = sleeper_league.my_roster_id_from_draft(draft, league["user_id"])
+    if roster_id is None and not st.session_state.get("rehearsal_draft_id"):
+        if "my_roster_id" not in st.session_state:
+            rosters = sleeper_league.get_rosters(league["league_id"])
+            st.session_state.my_roster_id = sleeper_league.my_roster_id(rosters, league["user_id"])
+        roster_id = st.session_state.my_roster_id
+    result = apply_picks(picks, board_by_id, league["user_id"], roster_id)
 
     new_taken = {player_key(p) for p in result.taken}
     new_mine_keys = [player_key(p) for p in result.mine]
     previous = st.session_state.draft_info or {}
     new_info = {
+        "draft_id": draft_id,
         "status": draft.get("status"),
         "has_order": bool(draft.get("draft_order")),
+        "rounds": (draft.get("settings") or {}).get("rounds"),
         "picks": len(picks),
         "next": next_pick_info(draft, len(picks), league["user_id"]),
         "unmatched": len(result.unmatched),
@@ -529,6 +541,10 @@ if league and league.get("draft_id") and st.session_state.pop("sync_requested", 
     except Exception as e:
         st.session_state.sync_error_text = f"Sync failed: {e}"
         st.session_state.sync_error = True
+
+
+# Total picks follow the draft being synced (a mock may have a different round count)
+total_picks = (st.session_state.draft_info or {}).get("rounds") or (sum(starters.values()) + bench_spots)
 
 
 # ==================== SIDEBAR ====================
@@ -585,6 +601,37 @@ with st.sidebar:
         with st.popover("Disconnect", use_container_width=True):
             st.caption("Forget this league and its saved connection?")
             st.button("Yes, disconnect", on_click=forget_league, type="primary")
+
+        def start_rehearsal():
+            draft_id = sleeper_league.parse_draft_id(st.session_state.get("rehearsal_input", ""))
+            if not draft_id:
+                st.session_state.rehearsal_error = "Paste a Sleeper draft link or id"
+                return
+            st.session_state.rehearsal_draft_id = draft_id
+            st.session_state.rehearsal_error = None
+            reset_draft()
+
+        def stop_rehearsal():
+            st.session_state.pop("rehearsal_draft_id", None)
+            reset_draft()
+
+        with st.expander("Rehearse with a mock draft", expanded=bool(st.session_state.get("rehearsal_draft_id"))):
+            st.caption(
+                "Start a mock draft in the Sleeper app, paste its link here, and the app syncs "
+                "that draft's picks onto this league's board and scoring."
+            )
+            if st.session_state.get("rehearsal_draft_id"):
+                st.markdown(
+                    f"<span style='color:#fbbf24'>Rehearsing with draft {st.session_state.rehearsal_draft_id}</span>",
+                    unsafe_allow_html=True,
+                )
+                st.button("Stop rehearsal", on_click=stop_rehearsal, use_container_width=True)
+            else:
+                st.text_input("Mock draft link or id", key="rehearsal_input", label_visibility="collapsed",
+                              placeholder="https://sleeper.com/draft/nfl/…")
+                st.button("Use this draft", on_click=start_rehearsal, use_container_width=True)
+                if st.session_state.get("rehearsal_error"):
+                    st.warning(st.session_state.rehearsal_error)
     else:
         username = st.text_input(
             "Sleeper username",
@@ -914,9 +961,10 @@ if mode == "Draft":
             stale = age > SYNC_STALE_SECONDS
             color = "#fb923c" if stale else "#7d8590"
             unmatched = f" · {info['unmatched']} unmatched" if info["unmatched"] else ""
+            rehearsal = " · <b style='color:#fbbf24'>REHEARSAL</b>" if st.session_state.get("rehearsal_draft_id") else ""
             st.markdown(
                 f"{status_html}<br><span class='rank-num' style='color:{color}'>"
-                f"Sleeper {str(info['status']).replace('_', '-')} · {info['picks']} picks{unmatched} · "
+                f"Sleeper {str(info['status']).replace('_', '-')} · {info['picks']} picks{unmatched}{rehearsal} · "
                 f"synced {int(age)}s ago{' ⚠️ stale' if stale else ''}</span>",
                 unsafe_allow_html=True,
             )

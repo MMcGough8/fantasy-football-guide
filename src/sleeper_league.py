@@ -1,4 +1,6 @@
 """Read-only client for the public Sleeper API (no auth required)."""
+import re
+
 import requests
 
 from roster_slots import starters_from_roster_positions
@@ -54,6 +56,24 @@ def get_draft(draft_id):
 
 def get_draft_picks(draft_id):
     return _get(f"draft/{draft_id}/picks") or []
+
+
+DRAFT_ID_PATTERN = re.compile(r"(\d{15,})")
+
+
+def parse_draft_id(text):
+    """A bare draft id or any Sleeper draft URL -> the id, else None."""
+    match = DRAFT_ID_PATTERN.search(text or "")
+    return match.group(1) if match else None
+
+
+def my_roster_id_from_draft(draft, user_id):
+    """roster_id for `user_id` from the draft's published order (works for mock drafts)."""
+    order = draft.get("draft_order") or {}
+    slot = order.get(user_id)
+    if slot is None:
+        return None
+    return (draft.get("slot_to_roster_id") or {}).get(str(slot))
 
 
 def my_roster_id(rosters, user_id):

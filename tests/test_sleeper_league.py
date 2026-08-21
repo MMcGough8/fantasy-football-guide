@@ -63,3 +63,20 @@ def test_get_user_wraps_http_errors(monkeypatch):
     monkeypatch.setattr(sleeper_league.requests, "get", lambda *a, **k: FakeResponse({}, 500))
     with pytest.raises(SleeperError):
         get_user("magoo82")
+
+
+def test_parse_draft_id_accepts_ids_and_urls():
+    from sleeper_league import parse_draft_id
+
+    assert parse_draft_id("1379964731309162496") == "1379964731309162496"
+    assert parse_draft_id("https://sleeper.com/draft/nfl/1379964731309162496") == "1379964731309162496"
+    assert parse_draft_id(" https://sleeper.com/draft/nfl/1379964731309162496?x=1 ") == "1379964731309162496"
+    assert parse_draft_id("not a draft") is None
+
+
+def test_my_roster_id_from_draft_order():
+    from sleeper_league import my_roster_id_from_draft
+
+    draft = {"draft_order": {"u1": 1, "me": 3}, "slot_to_roster_id": {"1": 1, "3": 7}}
+    assert my_roster_id_from_draft(draft, "me") == 7
+    assert my_roster_id_from_draft({"draft_order": None}, "me") is None
