@@ -41,6 +41,7 @@ SEASON = "2026"
 SYNC_INTERVAL = "15s"  # how often auto-sync polls the Sleeper draft
 FEED_CACHE_SECONDS = 1800  # projections refresh twice an hour; a rebuild takes ~4 s
 SYNC_STALE_SECONDS = 45  # heartbeat turns orange when the last sync is older than this
+SYNC_MIN_GAP_SECONDS = 5  # a rerun right after a sync does not sync again
 SOURCE_SPLIT_PCT = 0.15  # flag a player when Sleeper and FantasyPros differ by this much
 LEAGUE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".sleeper_league.json"
@@ -140,53 +141,57 @@ def espn_photo(player_id):
     return f"https://a.espncdn.com/i/headshots/nfl/players/full/{player_id}.png"
 
 
-class DegradedBoard(Exception):
-    """A board built with a feed missing. Raised (not returned) from the cached loader so
-    Streamlit does not cache it and the missing feed is retried on the next run."""
-
-    def __init__(self, board, note):
-        super().__init__(note)
-        self.board = board
-        self.note = note
+# A board with a feed missing is cached like any other, but under a retry bucket
+# that rolls every few minutes, so the missing feed is retried on a schedule
+# instead of on every rerun (a down feed would otherwise block every click).
+DEGRADED_RETRY_SECONDS = 300
 
 
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading FantasyPros consensus...")
-def load_fantasypros(season):
-    return fantasypros.fetch_all(season, os.getenv("FANTASYPROS_API_KEY", "").strip())
+def load_fantasypros(season, retry_bucket):
+    try:
+        return {"ok": True, "data": fantasypros.fetch_all(season, os.getenv("FANTASYPROS_API_KEY", "").strip())}
+    except FantasyProsError as e:
+        return {"ok": False, "error": str(e)}
 
 
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading ESPN projections...")
-def load_espn(season):
-    return espn_projections.fetch_all(season)
+def load_espn(season, retry_bucket):
+    try:
+        return {"ok": True, "data": espn_projections.fetch_all(season)}
+    except EspnError as e:
+        return {"ok": False, "error": str(e)}
 
 
 def refresh_projections():
     load_board.clear()
     load_fantasypros.clear()
     load_espn.clear()
+    st.session_state.board_degraded = False
 
 
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading projections from Sleeper...")
-def load_board(scoring, num_teams, scoring_items, starters_items, use_fantasypros):
-    """Returns (board, projection_note). Dicts arrive as sorted tuples so the cache can hash them."""
+def load_board(scoring, num_teams, scoring_items, starters_items, use_fantasypros, retry_bucket):
+    """Returns (board, projection_note, degraded). Dicts arrive as sorted tuples so the
+    cache can hash them; `retry_bucket` only changes while a feed is missing."""
     scoring_settings = dict(scoring_items) if scoring_items else None
     extra, live_ranks, problems = {}, None, []
     if use_fantasypros:
-        try:
-            fp = load_fantasypros(SEASON)
-            extra["fp"] = fp["projections"]
-            if fp["missing"]:
-                problems.append(f"FantasyPros missing {'/'.join(fp['missing'])}")
-        except FantasyProsError as e:
-            problems.append(f"FantasyPros unavailable: {e}")
-    try:
-        espn = load_espn(SEASON)
-        extra["espn"] = espn["projections"]
-        live_ranks = espn["ranks"]
-        if espn["missing"]:
-            problems.append(f"ESPN missing {'/'.join(espn['missing'])}")
-    except EspnError as e:
-        problems.append(f"ESPN unavailable: {e}")
+        fp = load_fantasypros(SEASON, retry_bucket)
+        if fp["ok"]:
+            extra["fp"] = fp["data"]["projections"]
+            if fp["data"]["missing"]:
+                problems.append(f"FantasyPros missing {'/'.join(fp['data']['missing'])}")
+        else:
+            problems.append(f"FantasyPros unavailable: {fp['error']}")
+    espn = load_espn(SEASON, retry_bucket)
+    if espn["ok"]:
+        extra["espn"] = espn["data"]["projections"]
+        live_ranks = espn["data"]["ranks"]
+        if espn["data"]["missing"]:
+            problems.append(f"ESPN missing {'/'.join(espn['data']['missing'])}")
+    else:
+        problems.append(f"ESPN unavailable: {espn['error']}")
 
     names = ["Sleeper (Rotowire)"] + [
         label for key, label in (("fp", "FantasyPros consensus"), ("espn", "ESPN")) if key in extra
@@ -200,9 +205,7 @@ def load_board(scoring, num_teams, scoring_items, starters_items, use_fantasypro
     board = build_board(
         scoring, num_teams, scoring_settings, dict(starters_items), extra or None, live_ranks
     )
-    if problems:
-        raise DegradedBoard(board, note)
-    return board, note
+    return board, note, bool(problems)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -344,16 +347,22 @@ else:
     scoring_items = None
     scoring_label = st.session_state.scoring_pref
 
+# While a feed is missing the cache key rolls every DEGRADED_RETRY_SECONDS so it retries
+retry_bucket = (
+    int(time.time() // DEGRADED_RETRY_SECONDS) if st.session_state.get("board_degraded") else 0
+)
 try:
-    board, projection_note = load_board(
+    board, projection_note, degraded = load_board(
         SCORING_LABELS[st.session_state.scoring_pref],
         num_teams,
         scoring_items,
         tuple(sorted(starters.items())),
         bool(os.getenv("FANTASYPROS_API_KEY", "").strip()),
+        retry_bucket,
     )
-except DegradedBoard as degraded:
-    board, projection_note = degraded.board, degraded.note + " (retrying)"
+    st.session_state.board_degraded = degraded
+    if degraded:
+        projection_note += f" (retrying every {DEGRADED_RETRY_SECONDS // 60} min)"
 except Exception as e:
     st.error(f"Couldn't load projections from Sleeper: {e}")
     c1, c2 = st.columns(2)
@@ -428,11 +437,12 @@ def request_sync():
 
 
 if league and league.get("draft_id") and st.session_state.pop("sync_requested", False):
-    # Runs before any widget renders, so a manual sync never resets widget state
+    # Runs before any widget renders, so a manual sync never resets widget state.
+    # Any failure (network or an unexpected payload) is shown, never fatal.
     try:
         sync_picks_from_sleeper()
-    except SleeperError as e:
-        st.session_state.sync_error_text = str(e)
+    except Exception as e:
+        st.session_state.sync_error_text = f"Sync failed: {e}"
         st.session_state.sync_error = True
 
 
@@ -703,7 +713,7 @@ st.markdown(
 if mode == "Draft":
     # ---- Scoring + league size (manual unless a Sleeper league is connected) ----
     if league:
-        sleeper_stamp = max((p.get("sleeper_updated_at") or 0) for p in board)
+        sleeper_stamp = max(((p.get("sleeper_updated_at") or 0) for p in board), default=0)
         hours_old = (time.time() - sleeper_stamp / 1000) / 3600 if sleeper_stamp else None
         age_txt = f" Sleeper projections updated {hours_old:.0f}h ago." if hours_old is not None else ""
         gaps = unprojected_bonus_keys(league["scoring_settings"])
@@ -774,14 +784,16 @@ if mode == "Draft":
     m3.markdown(stat_card("Your Roster", len(my_roster)), unsafe_allow_html=True)
     m4.markdown(stat_card("Your Pick In", your_pick), unsafe_allow_html=True)
 
-    # Other teams' picks before my next turn: the horizon for "will he be there"
+    # reach = other teams' picks before I am on the clock (0 = my turn now);
+    # horizon = picks between that turn and the one after, the "will he be there" window.
     if next_pick:
-        gap = next_pick["picks_until_mine"] or next_pick["picks_until_following"]
+        reach = next_pick["picks_until_mine"]
+        horizon = next_pick["picks_until_following"] or num_teams
         gap_note = "before your next pick"
     else:
-        gap = None
+        reach, horizon = 0, None
         gap_note = "in the next round (draft order not published yet)"
-    panel_gap = gap or num_teams
+    panel_gap = reach or horizon or num_teams
 
     # ---- Likely gone ----
     gone = likely_gone(available, picks_made, panel_gap)
@@ -832,11 +844,14 @@ if mode == "Draft":
 
             @st.fragment(run_every=SYNC_INTERVAL)
             def auto_sync_fragment():
+                # The fragment also runs inline on every full rerun; skip if a sync just happened
+                if time.time() - st.session_state.get("last_sync_at", 0) < SYNC_MIN_GAP_SECONDS:
+                    return
                 try:
                     if sync_picks_from_sleeper():
                         st.rerun(scope="app")
-                except SleeperError as e:
-                    st.warning(str(e))
+                except Exception as e:
+                    st.warning(f"Sync failed: {e}")
 
             auto_sync_fragment()
 
@@ -848,7 +863,8 @@ if mode == "Draft":
         total_picks,
         Counter(p["position"] for p in my_roster),
         picks_made=picks_made,
-        gap=gap,
+        gap=horizon,
+        reach_gap=reach,
     )
     if pick:
         photo = sleeper_photo(pick.get("player_id"))
@@ -923,29 +939,38 @@ if mode == "Draft":
 
     # ---- Unmatched Sleeper picks ----
     unmatched_names = (st.session_state.draft_info or {}).get("unmatched_names") or []
-    still_unmatched = [u for u in unmatched_names if f"{u['name']}|{u['team']}|{u['position']}" not in drafted_keys]
+    still_unmatched = []
+    for u in unmatched_names:
+        on_board = next(
+            (p for p in board if match_key(p["name"], p["position"]) == match_key(u["name"], u["position"])),
+            None,
+        )
+        target = on_board or {"name": u["name"], "team": u["team"], "position": u["position"]}
+        if player_key(target) not in drafted_keys:
+            still_unmatched.append((u, target))
     if still_unmatched:
         st.markdown(
             "<span class='rank-num'>Sleeper picks not on the board (mark them so they drop out of recommendations):</span>",
             unsafe_allow_html=True,
         )
         ucols = st.columns(min(4, len(still_unmatched)))
-        for i, u in enumerate(still_unmatched):
-            synthetic = {"name": u["name"], "team": u["team"], "position": u["position"]}
-            on_board = next((p for p in board if match_key(p["name"], p["position"]) == match_key(u["name"], u["position"])), None)
+        for i, (u, target) in enumerate(still_unmatched):
             ucols[i % len(ucols)].button(
                 f"Taken: {u['name']} ({u['position']})",
                 key=f"unmatched_{i}",
                 on_click=draft_player,
-                args=(on_board or synthetic, False),
+                args=(target, False),
                 use_container_width=True,
             )
 
     # ---- Cost of waiting ----
     st.markdown(
-        f"<div class='sec-head'>Cost of Waiting · {gap_note}</div>", unsafe_allow_html=True
+        "<div class='sec-head'>Cost of Waiting · your next turn vs the one after</div>",
+        unsafe_allow_html=True,
     )
-    waiting = cost_of_waiting(available, ["QB", "RB", "WR", "TE"], picks_made, panel_gap)
+    waiting = cost_of_waiting(
+        available, ["QB", "RB", "WR", "TE"], picks_made, horizon or num_teams, reach_gap=reach
+    )
     wcols = st.columns(4)
     for col, pos in zip(wcols, ["QB", "RB", "WR", "TE"]):
         row = waiting.get(pos)

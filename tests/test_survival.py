@@ -49,7 +49,7 @@ def test_opportunity_cost_prefers_the_player_who_will_not_be_there():
         available, needs={"RB": 2}, roster_size=0, total_picks=14, picks_made=5, gap=13
     )
     assert pick["name"] == "CMC"
-    assert "to be there" in reason
+    assert "still be there" in reason
 
 
 def test_recommendation_without_pick_info_is_pure_vor():
@@ -74,3 +74,34 @@ def test_cost_of_waiting_per_position():
     assert qb["now"]["name"] == "QB1" and qb["cost"] > rb["cost"]
     assert rb["now"]["name"] == "RB1"
     assert rb["cost"] >= 0
+
+
+def test_between_turns_only_players_likely_to_reach_me_are_candidates():
+    # 10 picks until my turn: the ADP-5 star is gone; the ADP-40 player reaches me
+    available = [_p("Star", "WR", 150, 5), _p("Reachable", "WR", 60, 40)]
+    pick, _ = recommend_pick(
+        available, needs={"WR": 2}, roster_size=1, total_picks=14,
+        picks_made=6, gap=18, reach_gap=10,
+    )
+    assert pick["name"] == "Reachable"
+
+
+def test_on_the_clock_everyone_is_a_candidate():
+    available = [_p("Star", "WR", 150, 5), _p("Reachable", "WR", 60, 40)]
+    pick, _ = recommend_pick(
+        available, needs={"WR": 2}, roster_size=1, total_picks=14,
+        picks_made=6, gap=18, reach_gap=0,
+    )
+    assert pick["name"] == "Star"
+
+
+def test_players_without_adp_do_not_pin_the_expected_best():
+    pool = [_p("Known", "RB", 100, 10), _p("Mystery", "RB", 120, None), _p("Depth", "RB", 30, 150)]
+    e = expected_best_vor(pool, "RB", picks_made=5, gap=20)
+    assert e < 100  # Mystery (no ADP) is ignored, not assumed 100% available
+
+
+def test_cost_of_waiting_now_column_respects_reach():
+    available = [_p("Star", "RB", 150, 5), _p("Reachable", "RB", 60, 40), _p("Depth", "RB", 20, 120)]
+    table = cost_of_waiting(available, ["RB"], picks_made=6, gap=18, reach_gap=10)
+    assert table["RB"]["now"]["name"] == "Reachable"

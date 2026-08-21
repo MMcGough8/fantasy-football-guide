@@ -8,6 +8,7 @@ ADP_SD_RATIO = 0.30  # spread of a player's actual draft slot around his ADP
 ADP_SD_FLOOR = 5.0
 LIKELY_GONE_THRESHOLD = 0.5
 MARKET_CANDIDATES = 40
+MIN_REACH_PROBABILITY = 0.25  # between turns, only players this likely to reach me count
 
 NEED_BONUS = 20.0  # added to VOR when the player fills an open starting slot
 LATE_NEED_BONUS = 100.0  # K/DEF still open inside the final picks: take one
@@ -62,6 +63,8 @@ def expected_best_vor(pool, position, picks_made, gap, exclude=None):
     )
     expected, all_better_gone = 0.0, 1.0
     for p in players:
+        if not p.get("adp"):
+            continue  # no market read; do not let him pin the expectation as a sure thing
         alive = survival_probability(p.get("adp"), picks_made, gap)
         expected += p["vor"] * alive * all_better_gone
         all_better_gone *= 1.0 - alive
@@ -81,15 +84,30 @@ def likely_gone(available, picks_made, gap, limit=6):
     return gone[:limit]
 
 
-def cost_of_waiting(available, positions, picks_made, gap):
-    """For each position: best now vs expected best at your next turn."""
+def reaches_me(p, picks_made, reach_gap):
+    """Could this player still be there when I am next on the clock?"""
+    if not reach_gap:
+        return True
+    return survival_probability(p.get("adp"), picks_made, reach_gap) >= MIN_REACH_PROBABILITY
+
+
+def cost_of_waiting(available, positions, picks_made, gap, reach_gap=0):
+    """For each position: best I can expect at my next turn vs the turn after.
+
+    `reach_gap` is other teams' picks before my next turn (0 when on the clock);
+    `gap` is the picks between that turn and the following one.
+    """
+    at_my_pick = picks_made + reach_gap
     table = {}
     for pos in positions:
-        candidates = [p for p in available if p["position"] == pos and not is_unavailable(p)]
+        candidates = [
+            p for p in available
+            if p["position"] == pos and not is_unavailable(p) and reaches_me(p, picks_made, reach_gap)
+        ]
         if not candidates:
             continue
         best = max(candidates, key=lambda p: p["vor"])
-        later = expected_best_vor(available, pos, picks_made, gap, exclude=best)
+        later = expected_best_vor(available, pos, at_my_pick, gap, exclude=best)
         table[pos] = {"now": best, "later": round(later, 1), "cost": round(best["vor"] - later, 1)}
     return table
 
@@ -104,19 +122,24 @@ def fills_need(position, needs):
 
 
 def recommend_pick(
-    available, needs, roster_size, total_picks, roster_counts=None, picks_made=None, gap=None
+    available, needs, roster_size, total_picks, roster_counts=None,
+    picks_made=None, gap=None, reach_gap=0,
 ):
     """Return (player, reason). `roster_size` is how many picks you have made;
-    `roster_counts` is {position: count} for what you already hold. With
-    `picks_made` and `gap` (other teams' picks before your next turn) the score
-    becomes VOR minus the expected best at that position next turn, so a player
-    who will not be there outranks one who will."""
+    `roster_counts` is {position: count} for what you already hold.
+
+    Market-aware mode needs `picks_made`, `gap` (other teams' picks between my
+    next turn and the one after) and `reach_gap` (picks before my next turn; 0
+    when I am on the clock). Candidates are then limited to players likely to
+    reach me, and each is scored as his VOR plus the best pick I can expect the
+    turn after, so a player who will not be there outranks one who will."""
     if not available:
         return None, ""
     picks_left = total_picks - roster_size
     in_late_window = picks_left <= LATE_ROUND_WINDOW
     counts = roster_counts or {}
     use_market = picks_made is not None and gap is not None and gap > 0
+    at_my_pick = (picks_made or 0) + (reach_gap or 0)
 
     def is_candidate(p):
         pos = p["position"]
@@ -124,12 +147,16 @@ def recommend_pick(
             return False
         if counts.get(pos, 0) >= POSITION_CAPS.get(pos, 99):
             return False
+        if use_market and not reaches_me(p, picks_made, reach_gap):
+            return False
         if pos not in LATE_ONLY_POSITIONS:
             return True
         # A kicker or defense is only ever a pick when a slot is open and the draft is ending
         return in_late_window and fills_need(pos, needs)
 
-    candidates = [p for p in available if is_candidate(p)] or available
+    candidates = [p for p in available if is_candidate(p)]
+    if not candidates:
+        candidates = [p for p in available if not is_unavailable(p)] or available
     if use_market:
         # The lookahead is O(pool) per candidate; only the top of the board can win
         candidates = sorted(candidates, key=lambda p: p["vor"], reverse=True)[:MARKET_CANDIDATES]
@@ -139,7 +166,7 @@ def recommend_pick(
         # if this player is gone from the pool.
         if not use_market or p["position"] in LATE_ONLY_POSITIONS:
             return p["vor"]
-        return p["vor"] + expected_best_vor(available, None, picks_made, gap, exclude=p)
+        return p["vor"] + expected_best_vor(available, None, at_my_pick, gap, exclude=p)
 
     def adjusted(p):
         value = base_value(p)
@@ -154,10 +181,12 @@ def recommend_pick(
         f"fills a need at {pick['position']}" if fills_need(pick["position"], needs) else "best value on the board"
     )
     if use_market and pick["position"] not in LATE_ONLY_POSITIONS:
-        back = survival_probability(pick.get("adp"), picks_made, gap)
-        later = expected_best_vor(available, pick["position"], picks_made, gap, exclude=pick)
-        reason += (
-            f" · {back:.0%} to be there at your next pick; "
-            f"best {pick['position']} then is worth about {later:.0f} VOR"
-        )
+        later = expected_best_vor(available, pick["position"], at_my_pick, gap, exclude=pick)
+        if reach_gap:
+            reach = survival_probability(pick.get("adp"), picks_made, reach_gap)
+            reason += f" · {reach:.0%} to reach your pick"
+        else:
+            back = survival_probability(pick.get("adp"), picks_made, gap)
+            reason += f" · {back:.0%} to still be there next turn"
+        reason += f"; best {pick['position']} the turn after is worth about {later:.0f} VOR"
     return pick, reason
