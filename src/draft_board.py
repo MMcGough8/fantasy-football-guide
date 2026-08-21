@@ -4,14 +4,18 @@ import requests
 
 from espn_ranks import attach_espn_ranks, match_key
 from scoring import score_stats
+from tiers import tiers_for_position
 
 _bye_cache = None
 
 SEASON = "2026"
 POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
 MIN_POINTS = 1.0  # drop inactive/depth players with negligible projections
-TIER_GAP = 15.0  # points drop-off that starts a new within-position tier
-GLOBAL_TIER_GAP = 12.0  # VOR drop-off that starts a new cross-position tier
+# How deep each position gets drafted in a 12-team, 14-round league; tiers are
+# clustered inside this pool and everyone past it shares one trailing tier.
+DRAFTABLE_POOL = {"QB": 24, "RB": 60, "WR": 70, "TE": 24, "K": 14, "DEF": 14}
+GLOBAL_POOL = 168  # 12 teams x 14 rounds
+GLOBAL_PLAYERS_PER_TIER = 8
 
 # How a flex slot's demand is split across the positions it accepts.
 FLEX_SHARES = {
@@ -153,14 +157,9 @@ def add_value_over_replacement(players, position, replacement_rank):
     return players
 
 
-def assign_tiers(players, gap=TIER_GAP):
-    """Within a position, a new tier starts on a big scoring drop-off."""
-    tier = 1
-    for i, p in enumerate(players):
-        if i > 0 and (players[i - 1]["points"] - p["points"]) > gap:
-            tier += 1
-        p["tier"] = tier
-    return players
+def assign_tiers(players, position):
+    """Within-position tiers by clustering projected points in the draftable pool."""
+    return tiers_for_position(players, DRAFTABLE_POOL.get(position, 24), key="points", label="tier")
 
 
 def get_bye_weeks(season=SEASON):
@@ -218,7 +217,7 @@ def build_board(
         }
         players = fetch_position(pos, scoring, scoring_settings, extra_sources)
         players = add_value_over_replacement(players, pos, ranks)
-        players = assign_tiers(players)
+        players = assign_tiers(players, pos)
         board.extend(players)
 
     byes = get_bye_weeks()
@@ -227,11 +226,15 @@ def build_board(
 
     board.sort(key=lambda p: p["vor"], reverse=True)
 
-    global_tier = 1
-    for i, p in enumerate(board):
-        if i > 0 and (board[i - 1]["vor"] - p["vor"]) > GLOBAL_TIER_GAP:
-            global_tier += 1
-        p["global_tier"] = global_tier
+    from tiers import cluster_tiers
+
+    pool = board[:GLOBAL_POOL]
+    labels = cluster_tiers([p["vor"] for p in pool], max(3, round(len(pool) / GLOBAL_PLAYERS_PER_TIER)))
+    for p, t in zip(pool, labels):
+        p["global_tier"] = t
+    trailing = (labels[-1] if labels else 0) + 1
+    for p in board[GLOBAL_POOL:]:
+        p["global_tier"] = trailing
 
     return attach_espn_ranks(board, live_espn_ranks)
 
