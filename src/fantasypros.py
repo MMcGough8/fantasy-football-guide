@@ -1,10 +1,14 @@
 """FantasyPros consensus projections (public API v2, needs FANTASYPROS_API_KEY)."""
+import time
+
 import requests
 
 from espn_ranks import match_key
 
 BASE_URL = "https://api.fantasypros.com/public/v2/json"
 TIMEOUT_SECONDS = 20
+RETRY_DELAYS = (0.5, 1.0, 2.0)  # backoff on 429 / 5xx; the public API is rate limited
+RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 PRESEASON_WEEK = 0
 
 # Board position -> FantasyPros position id
@@ -36,6 +40,28 @@ class FantasyProsError(Exception):
     """Raised for any failure talking to FantasyPros, with a user-facing message."""
 
 
+def _get_with_retry(url, api_key, params):
+    attempts = len(RETRY_DELAYS) + 1
+    for attempt in range(attempts):
+        try:
+            resp = requests.get(
+                url, headers={"x-api-key": api_key}, params=params, timeout=TIMEOUT_SECONDS
+            )
+            if resp.status_code in RETRYABLE_STATUSES and attempt < attempts - 1:
+                time.sleep(RETRY_DELAYS[attempt])
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            if attempt < attempts - 1:
+                time.sleep(RETRY_DELAYS[attempt])
+                continue
+            raise FantasyProsError(f"Couldn't reach FantasyPros ({e})") from e
+        except ValueError as e:
+            raise FantasyProsError(f"FantasyPros returned an unexpected response ({e})") from e
+    raise FantasyProsError("FantasyPros did not answer")
+
+
 def to_sleeper_stats(fp_stats):
     return {STAT_MAP[k]: v for k, v in fp_stats.items() if k in STAT_MAP}
 
@@ -45,19 +71,7 @@ def fetch_projections(position, season, api_key):
     if not api_key:
         raise FantasyProsError("FANTASYPROS_API_KEY is not set")
     params = {"position": FP_POSITIONS[position], "week": PRESEASON_WEEK}
-    try:
-        resp = requests.get(
-            f"{BASE_URL}/nfl/{season}/projections",
-            headers={"x-api-key": api_key},
-            params=params,
-            timeout=TIMEOUT_SECONDS,
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-    except requests.RequestException as e:
-        raise FantasyProsError(f"Couldn't reach FantasyPros ({e})") from e
-    except ValueError as e:
-        raise FantasyProsError(f"FantasyPros returned an unexpected response ({e})") from e
+    payload = _get_with_retry(f"{BASE_URL}/nfl/{season}/projections", api_key, params)
 
     players = payload.get("players") if isinstance(payload, dict) else None
     if players is None:
@@ -70,5 +84,16 @@ def fetch_projections(position, season, api_key):
 
 
 def fetch_all(season, api_key):
-    """Return {board_position: {normalized_name: stats}} for every position."""
-    return {pos: fetch_projections(pos, season, api_key) for pos in FP_POSITIONS}
+    """Return {"projections": {position: {match_key: stats}}, "missing": [positions]}.
+
+    A position that fails is skipped so one bad response does not drop the feed.
+    """
+    projections, missing = {}, []
+    for pos in FP_POSITIONS:
+        try:
+            projections[pos] = fetch_projections(pos, season, api_key)
+        except FantasyProsError:
+            missing.append(pos)
+    if not projections:
+        raise FantasyProsError("FantasyPros returned nothing for any position")
+    return {"projections": projections, "missing": missing}

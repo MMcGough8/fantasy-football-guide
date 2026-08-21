@@ -99,3 +99,37 @@ def test_previous_season_block_is_skipped(espn_sample):
     rows = parse_players(espn_sample["RB"]["players"], "RB", "2026")
     assert rows[match_key("Jahmyr Gibbs", "RB")]["stats"]["pts_ppr"] == pytest.approx(364.9, abs=0.1)
     assert parse_players(espn_sample["RB"]["players"], "RB", "2027") == {}
+
+
+def test_fetch_all_keeps_positions_that_answered(monkeypatch, espn_sample):
+    real = _fake_api(espn_sample)
+
+    def partial(url, headers=None, params=None, timeout=None):
+        import json
+
+        slot = json.loads(headers["X-Fantasy-Filter"])["players"]["filterSlotIds"]["value"][0]
+        if slot == espn_projections.SLOT_IDS["TE"]:
+            raise requests.ConnectionError("down")
+        return real(url, headers=headers, params=params, timeout=timeout)
+
+    monkeypatch.setattr(espn_projections.requests, "get", partial)
+    result = fetch_all("2026")
+    assert "TE" not in result["projections"]
+    assert result["missing"] == ["TE"]
+
+
+def test_berry_ranks_match_defenses_by_nickname(monkeypatch):
+    import espn_ranks
+
+    monkeypatch.setattr(espn_ranks, "_berry_cache", None)
+    monkeypatch.setattr(espn_ranks, "_espn_cache", None)
+    monkeypatch.setattr(
+        espn_ranks, "_load",
+        lambda name: [{"name": "Texans D/ST", "position": "DST", "berry_rank": 150, "espn_rank": 140}],
+    )
+    board = [{"name": "Houston Texans", "position": "DEF", "vor": 10}]
+    espn_ranks.attach_ranks(board)
+    assert board[0]["berry_rank"] == 150
+    assert board[0]["espn_rank"] == 140
+    monkeypatch.setattr(espn_ranks, "_berry_cache", None)
+    monkeypatch.setattr(espn_ranks, "_espn_cache", None)

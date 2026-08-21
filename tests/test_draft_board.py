@@ -164,3 +164,19 @@ def test_zero_point_sleeper_line_is_not_counted_as_a_source(monkeypatch, project
     assert fetch_position("RB", "pts_ppr", scoring_settings=league["scoring_settings"]) == [
         p for p in fetch_position("RB", "pts_ppr", scoring_settings=league["scoring_settings"]) if p["name"] != "Jahmyr Gibbs"
     ]
+
+
+def test_bye_weeks_ignore_canceled_games(monkeypatch):
+    games = [
+        {"week": 1, "home": "DAL", "away": "SEA", "status": "complete"},
+        {"week": 2, "home": "DAL", "away": "NYG", "status": "canceled"},
+        {"week": 2, "home": "SEA", "away": "LAR"},
+        {"week": 3, "home": "DAL", "away": "SEA"},
+        {"week": 3, "home": "NYG", "away": "LAR"},
+    ]
+    monkeypatch.setattr(draft_board.requests, "get", lambda *a, **k: FakeResponse(games))
+    draft_board._bye_cache = None
+    byes = draft_board.get_bye_weeks()
+    draft_board._bye_cache = None
+    assert byes["DAL"] == 2  # the canceled week-2 game does not count as played
+    assert byes["LAR"] == 1

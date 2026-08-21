@@ -56,7 +56,7 @@ def test_fetch_projections_keys_by_normalized_name(monkeypatch, fp_sample):
 
 def test_fetch_all_maps_def_to_dst_and_back(monkeypatch, fp_sample):
     monkeypatch.setattr(fantasypros.requests, "get", _fake_api(fp_sample))
-    everything = fetch_all("2026", "test-key")
+    everything = fetch_all("2026", "test-key")["projections"]
     assert set(everything) == {"QB", "RB", "WR", "TE", "K", "DEF"}
     assert match_key("Houston Texans", "DEF") in everything["DEF"]
 
@@ -67,6 +67,7 @@ def test_missing_key_is_an_error():
 
 
 def test_http_errors_are_wrapped(monkeypatch):
+    monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
     monkeypatch.setattr(fantasypros.requests, "get", lambda *a, **k: FakeResponse({}, 403))
     with pytest.raises(FantasyProsError, match="FantasyPros"):
         fetch_projections("RB", "2026", "bad-key")
@@ -76,6 +77,53 @@ def test_network_errors_are_wrapped(monkeypatch):
     def boom(*a, **k):
         raise requests.ConnectionError("down")
 
+    monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
     monkeypatch.setattr(fantasypros.requests, "get", boom)
     with pytest.raises(FantasyProsError):
         fetch_projections("RB", "2026", "test-key")
+
+
+def test_retries_on_429_then_succeeds(monkeypatch, fp_sample):
+    calls = []
+
+    def flaky(url, headers=None, params=None, timeout=None):
+        calls.append(params["position"])
+        if len(calls) < 3:
+            return FakeResponse({}, 429)
+        return FakeResponse(fp_sample[params["position"]])
+
+    monkeypatch.setattr(fantasypros.requests, "get", flaky)
+    monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
+    rbs = fetch_projections("RB", "2026", "test-key")
+    assert len(calls) == 3
+    assert match_key("Jahmyr Gibbs", "RB") in rbs
+
+
+def test_gives_up_after_max_retries(monkeypatch):
+    monkeypatch.setattr(fantasypros.requests, "get", lambda *a, **k: FakeResponse({}, 503))
+    monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
+    with pytest.raises(FantasyProsError):
+        fetch_projections("RB", "2026", "test-key")
+
+
+def test_fetch_all_keeps_positions_that_answered(monkeypatch, fp_sample):
+    def partial(url, headers=None, params=None, timeout=None):
+        if params["position"] == "WR":
+            raise requests.ConnectionError("down")
+        return FakeResponse(fp_sample[params["position"]])
+
+    monkeypatch.setattr(fantasypros.requests, "get", partial)
+    monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
+    result = fetch_all("2026", "test-key")
+    assert set(result["projections"]) == {"QB", "RB", "TE", "K", "DEF"}
+    assert result["missing"] == ["WR"]
+
+
+def test_fetch_all_raises_when_nothing_answered(monkeypatch):
+    def boom(*a, **k):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(fantasypros.requests, "get", boom)
+    monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
+    with pytest.raises(FantasyProsError):
+        fetch_all("2026", "test-key")

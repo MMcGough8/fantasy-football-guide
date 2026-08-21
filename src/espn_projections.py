@@ -111,10 +111,17 @@ def fetch_position(position, season):
 
 
 def fetch_all(season):
-    """Return {"projections": {position: {key: stats}}, "ranks": {key: espn_rank}}."""
-    projections, ranks = {}, {}
+    """Return {"projections": {position: {key: stats}}, "ranks": {key: espn_rank},
+    "missing": [positions that failed]}."""
+    projections, ranks, missing = {}, {}, []
     for position in SLOT_IDS:
-        rows = fetch_position(position, season)
+        try:
+            rows = fetch_position(position, season)
+        except EspnError:
+            missing.append(position)
+            continue
         projections[position] = {k: r["stats"] for k, r in rows.items()}
         ranks.update({k: r["espn_rank"] for k, r in rows.items() if r["espn_rank"]})
-    return {"projections": projections, "ranks": ranks}
+    if not projections:
+        raise EspnError("ESPN returned nothing for any position")
+    return {"projections": projections, "ranks": ranks, "missing": missing}

@@ -173,7 +173,7 @@ def get_bye_weeks(season=SEASON):
     all_weeks = set()
     for g in games:
         wk = g.get("week")
-        if wk is None:
+        if wk is None or g.get("status") == "canceled":
             continue
         all_weeks.add(wk)
         for side in ("home", "away"):

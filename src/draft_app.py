@@ -118,13 +118,18 @@ def load_board(scoring, num_teams, scoring_items, starters_items, use_fantasypro
     extra, live_ranks, problems = {}, None, []
     if use_fantasypros:
         try:
-            extra["fp"] = load_fantasypros(SEASON)
+            fp = load_fantasypros(SEASON)
+            extra["fp"] = fp["projections"]
+            if fp["missing"]:
+                problems.append(f"FantasyPros missing {'/'.join(fp['missing'])}")
         except FantasyProsError as e:
             problems.append(f"FantasyPros unavailable: {e}")
     try:
         espn = load_espn(SEASON)
         extra["espn"] = espn["projections"]
         live_ranks = espn["ranks"]
+        if espn["missing"]:
+            problems.append(f"ESPN missing {'/'.join(espn['missing'])}")
     except EspnError as e:
         problems.append(f"ESPN unavailable: {e}")
 

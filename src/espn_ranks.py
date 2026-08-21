@@ -35,7 +35,8 @@ def load_espn_ranks():
     global _espn_cache
     if _espn_cache is None:
         _espn_cache = {
-            _normalize(r["name"]): r["espn_rank"] for r in _load("espn_rankings.json")
+            match_key(r["name"], r.get("position", "")): r["espn_rank"]
+            for r in _load("espn_rankings.json")
         }
     return _espn_cache
 
@@ -44,7 +45,8 @@ def load_berry_ranks():
     global _berry_cache
     if _berry_cache is None:
         _berry_cache = {
-            _normalize(r["name"]): r["berry_rank"] for r in _load("berry_rankings.json")
+            match_key(r["name"], r.get("position", "")): r["berry_rank"]
+            for r in _load("berry_rankings.json")
         }
     return _berry_cache
 
@@ -65,8 +67,8 @@ def attach_ranks(board, live_espn_ranks=None):
         p["sleeper_rank"] = i
 
     for p in board:
-        key = _normalize(p["name"])
-        p["espn_rank"] = live.get(match_key(p["name"], p["position"]), espn.get(key))
+        key = match_key(p["name"], p["position"])
+        p["espn_rank"] = live.get(key, espn.get(key))
         p["berry_rank"] = berry.get(key)
 
         # Consensus = average of whatever sources are available for this player
