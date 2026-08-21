@@ -99,3 +99,28 @@ def test_questionable_is_still_eligible():
     available = [dict(_p("RB Q", "RB", 50), injury_status="Questionable"), _p("RB B", "RB", 40)]
     pick, _ = recommend_pick(available, {"RB": 1}, roster_size=0, total_picks=TOTAL_PICKS)
     assert pick["name"] == "RB Q"
+
+
+def test_second_qb_waits_until_the_late_rounds():
+    available = [_p("QB B", "QB", 12), _p("WR E", "WR", -20)]
+    counts = {"QB": 1, "RB": 3, "WR": 2, "TE": 1, "K": 0, "DEF": 0}
+    # round 8: the backup QB has more VOR but never starts; depth WR wins
+    pick, _ = recommend_pick(available, needs={}, roster_size=7, total_picks=TOTAL_PICKS, roster_counts=counts)
+    assert pick["name"] == "WR E"
+    # round 11: the backup is allowed
+    pick, _ = recommend_pick(available, needs={}, roster_size=10, total_picks=TOTAL_PICKS, roster_counts=counts)
+    assert pick["name"] == "QB B"
+
+
+def test_second_te_waits_too_but_first_te_does_not():
+    available = [_p("TE B", "TE", 10), _p("RB F", "RB", -15)]
+    pick, _ = recommend_pick(available, needs={}, roster_size=7, total_picks=TOTAL_PICKS, roster_counts={"TE": 1})
+    assert pick["name"] == "RB F"
+    pick, _ = recommend_pick(available, needs={"TE": 1}, roster_size=7, total_picks=TOTAL_PICKS, roster_counts={"TE": 0})
+    assert pick["name"] == "TE B"
+
+
+def test_all_capped_fallback_still_keeps_kickers_out_early():
+    available = [_p("QB C", "QB", 40), _p("K A", "K", 15)]
+    pick, _ = recommend_pick(available, needs={"K": 1}, roster_size=5, total_picks=TOTAL_PICKS, roster_counts={"QB": 2})
+    assert pick["name"] == "QB C"

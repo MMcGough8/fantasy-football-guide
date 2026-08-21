@@ -788,12 +788,14 @@ if mode == "Draft":
     # horizon = picks between that turn and the one after, the "will he be there" window.
     if next_pick:
         reach = next_pick["picks_until_mine"]
-        horizon = next_pick["picks_until_following"] or num_teams
+        # 0 is real: back-to-back picks at the turn, or your last pick. Never pad it.
+        horizon = next_pick["picks_until_following"]
         gap_note = "before your next pick"
+        panel_gap = reach or horizon
     else:
         reach, horizon = 0, None
         gap_note = "in the next round (draft order not published yet)"
-    panel_gap = reach or horizon or num_teams
+        panel_gap = num_teams
 
     # ---- Likely gone ----
     gone = likely_gone(available, picks_made, panel_gap)
@@ -972,12 +974,15 @@ if mode == "Draft":
             )
 
     # ---- Cost of waiting ----
-    st.markdown(
-        "<div class='sec-head'>Cost of Waiting · your next turn vs the one after</div>",
-        unsafe_allow_html=True,
+    waiting_title = (
+        "Cost of Waiting · you pick again right away"
+        if horizon == 0
+        else "Cost of Waiting · your next turn vs the one after"
     )
+    st.markdown(f"<div class='sec-head'>{waiting_title}</div>", unsafe_allow_html=True)
     waiting = cost_of_waiting(
-        available, ["QB", "RB", "WR", "TE"], picks_made, horizon or num_teams, reach_gap=reach
+        available, ["QB", "RB", "WR", "TE"], picks_made,
+        horizon if horizon is not None else num_teams, reach_gap=reach,
     )
     wcols = st.columns(4)
     for col, pos in zip(wcols, ["QB", "RB", "WR", "TE"]):

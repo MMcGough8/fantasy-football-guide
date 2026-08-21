@@ -105,3 +105,19 @@ def test_cost_of_waiting_now_column_respects_reach():
     available = [_p("Star", "RB", 150, 5), _p("Reachable", "RB", 60, 40), _p("Depth", "RB", 20, 120)]
     table = cost_of_waiting(available, ["RB"], picks_made=6, gap=18, reach_gap=10)
     assert table["RB"]["now"]["name"] == "Reachable"
+
+
+def test_survival_spread_grows_with_the_square_root_of_adp():
+    # Early picks are tight, late picks loose: the odds of an ADP-10 player surviving
+    # 6 picks should be far lower than an ADP-100 player surviving 6 picks.
+    early = survival_probability(adp=10, picks_made=9, gap=6)
+    late = survival_probability(adp=100, picks_made=99, gap=6)
+    assert early < 0.5 < late
+    assert late > 0.7
+
+
+def test_cost_of_waiting_is_zero_when_you_pick_again_immediately():
+    available = [_p("RB1", "RB", 45, 30), _p("RB2", "RB", 20, 35)]
+    table = cost_of_waiting(available, ["RB"], picks_made=11, gap=0)
+    assert table["RB"]["cost"] == 0
+    assert table["RB"]["later"] == 45

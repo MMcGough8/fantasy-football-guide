@@ -196,3 +196,16 @@ def test_fetch_position_carries_injury_and_news_fields(monkeypatch, projections)
     assert g["news_updated"] == 1787212236910
     b = next(p for p in players if p["name"] == "Bijan Robinson")
     assert b["injury_status"] is None
+
+
+def test_sleeper_undrafted_adp_sentinel_becomes_none(monkeypatch, projections):
+    undrafted = dict(projections)
+    gibbs = dict(projections["RB"][0])
+    gibbs["stats"] = dict(gibbs["stats"], adp_ppr=999.0, adp_half_ppr=999.0, adp_std=999.0)
+    bijan = dict(projections["RB"][1])
+    bijan["stats"] = dict(bijan["stats"], adp_ppr=2.0, adp_half_ppr=2.0, adp_std=2.0)
+    undrafted["RB"] = [gibbs, bijan] + projections["RB"][2:]
+    monkeypatch.setattr(draft_board.requests, "get", _fake_projections(undrafted))
+    players = fetch_position("RB", "pts_ppr")
+    assert next(p for p in players if p["name"] == "Jahmyr Gibbs")["adp"] is None
+    assert next(p for p in players if p["name"] == "Bijan Robinson")["adp"] is not None

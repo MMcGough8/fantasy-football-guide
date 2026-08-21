@@ -64,6 +64,15 @@ def _points(stats, scoring, scoring_settings, position):
     return stats.get(scoring)
 
 
+UNDRAFTED_ADP = 999  # Sleeper's sentinel for "not being drafted"
+
+
+def _adp_or_none(value):
+    if value is None or value >= UNDRAFTED_ADP:
+        return None
+    return value
+
+
 def adp_key_for(scoring, scoring_settings):
     """Which Sleeper ADP column best matches the league's reception scoring."""
     if scoring_settings:
@@ -134,7 +143,7 @@ def fetch_position(position, scoring="pts_ppr", scoring_settings=None, extra_sou
                 "injury_notes": info.get("injury_notes"),
                 "news_updated": info.get("news_updated"),
                 "sources": len(lines),
-                "adp": sleeper_stats.get(adp_key),
+                "adp": _adp_or_none(sleeper_stats.get(adp_key)),
                 "years_exp": info.get("years_exp"),
                 "touches": (stats.get("rush_att") or 0) + (stats.get("rec") or 0),
                 "tds": (stats.get("rush_td") or 0) + (stats.get("rec_td") or 0),

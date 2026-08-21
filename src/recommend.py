@@ -4,19 +4,27 @@ import math
 
 from roster_slots import FLEX_ELIGIBILITY
 
-ADP_SD_RATIO = 0.30  # spread of a player's actual draft slot around his ADP
-ADP_SD_FLOOR = 5.0
+# Spread of a player's actual draft slot around his ADP: tight early, loose late.
+# sd = max(FLOOR, SCALE * sqrt(adp)) matched cross-site ADP disagreement best
+# (sd ~2 at ADP 10, ~8 at 40, ~22 at 100); a linear ratio was 10-25 points
+# too optimistic in the middle rounds.
+ADP_SD_SCALE = 2.2
+ADP_SD_FLOOR = 4.0
 LIKELY_GONE_THRESHOLD = 0.5
 MARKET_CANDIDATES = 40
 MIN_REACH_PROBABILITY = 0.25  # between turns, only players this likely to reach me count
 
-NEED_BONUS = 20.0  # added to VOR when the player fills an open starting slot
+NEED_BONUS = 30.0  # added to VOR when the player fills an open starting slot (swept: 25-35 best)
 LATE_NEED_BONUS = 100.0  # K/DEF still open inside the final picks: take one
 LATE_ROUND_WINDOW = 3  # K and DEF are only considered within this many picks of the end
 LATE_ONLY_POSITIONS = ("K", "DEF")
 # Most of a position you would ever roster in a 14-round draft; stops pure VOR
 # from stacking backup QBs and TEs once the starters are filled.
 POSITION_CAPS = {"QB": 2, "RB": 6, "WR": 6, "TE": 2, "K": 1, "DEF": 1}
+# A backup QB/TE never enters the lineup, so raw VOR overrates him against RB/WR
+# depth once the starters are filled. Simulated drafts gained ~6 injury-adjusted
+# points by holding the second QB/TE until this round.
+SECOND_QB_TE_ROUND = 11
 # Sleeper injury statuses that mean the player is not playing soon. Questionable,
 # Doubtful and Out are preseason noise and stay eligible.
 EXCLUDED_STATUSES = {"IR", "PUP", "Sus", "NA", "DNR", "COV"}
@@ -38,7 +46,7 @@ def survival_probability(adp, picks_made, gap):
     """
     if not adp or gap <= 0:
         return 1.0
-    sd = max(ADP_SD_FLOOR, ADP_SD_RATIO * adp)
+    sd = max(ADP_SD_FLOOR, ADP_SD_SCALE * math.sqrt(adp))
     now, later = picks_made, picks_made + gap
     alive_now = max(_normal_tail((now - adp) / sd), 1e-6)
     alive_later = _normal_tail((later - adp) / sd)
@@ -107,7 +115,11 @@ def cost_of_waiting(available, positions, picks_made, gap, reach_gap=0):
         if not candidates:
             continue
         best = max(candidates, key=lambda p: p["vor"])
-        later = expected_best_vor(available, pos, at_my_pick, gap, exclude=best)
+        if gap <= 0:
+            # Back-to-back picks: nobody can take him before you pick again
+            later = best["vor"]
+        else:
+            later = expected_best_vor(available, pos, at_my_pick, gap, exclude=best)
         table[pos] = {"now": best, "later": round(later, 1), "cost": round(best["vor"] - later, 1)}
     return table
 
@@ -141,22 +153,37 @@ def recommend_pick(
     use_market = picks_made is not None and gap is not None and gap > 0
     at_my_pick = (picks_made or 0) + (reach_gap or 0)
 
-    def is_candidate(p):
+    current_round = roster_size + 1
+
+    def allowed_now(p):
+        """Eligibility that must hold even in the fallback: health, K/DEF timing, QB2/TE2 timing."""
         pos = p["position"]
         if is_unavailable(p):
             return False
+        if pos in LATE_ONLY_POSITIONS:
+            # A kicker or defense is only ever a pick when a slot is open and the draft is ending
+            return in_late_window and fills_need(pos, needs)
+        if pos in ("QB", "TE") and counts.get(pos, 0) >= 1 and current_round < SECOND_QB_TE_ROUND:
+            return False
+        return True
+
+    def is_candidate(p):
+        pos = p["position"]
+        if not allowed_now(p):
+            return False
         if counts.get(pos, 0) >= POSITION_CAPS.get(pos, 99):
             return False
-        if use_market and not reaches_me(p, picks_made, reach_gap):
-            return False
-        if pos not in LATE_ONLY_POSITIONS:
-            return True
-        # A kicker or defense is only ever a pick when a slot is open and the draft is ending
-        return in_late_window and fills_need(pos, needs)
+        return not use_market or reaches_me(p, picks_made, reach_gap)
 
     candidates = [p for p in available if is_candidate(p)]
     if not candidates:
-        candidates = [p for p in available if not is_unavailable(p)] or available
+        # Last resort: relax caps, then timing rules, but never hand the pick to a
+        # kicker or defense before the final rounds or to an injured player.
+        candidates = (
+            [p for p in available if allowed_now(p)]
+            or [p for p in available if not is_unavailable(p) and p["position"] not in LATE_ONLY_POSITIONS]
+            or available
+        )
     if use_market:
         # The lookahead is O(pool) per candidate; only the top of the board can win
         candidates = sorted(candidates, key=lambda p: p["vor"], reverse=True)[:MARKET_CANDIDATES]
