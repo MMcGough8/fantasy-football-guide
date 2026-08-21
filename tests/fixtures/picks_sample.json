@@ -1,0 +1,72 @@
+[
+ {
+  "round": 1,
+  "pick_no": 1,
+  "draft_slot": 1,
+  "roster_id": 1,
+  "picked_by": "724035008792162304",
+  "player_id": "9221",
+  "metadata": {
+   "first_name": "Jahmyr",
+   "last_name": "Gibbs",
+   "position": "RB",
+   "team": "DET"
+  }
+ },
+ {
+  "round": 1,
+  "pick_no": 2,
+  "draft_slot": 2,
+  "roster_id": 2,
+  "picked_by": "724035008792162304",
+  "player_id": "9509",
+  "metadata": {
+   "first_name": "Bijan",
+   "last_name": "Robinson",
+   "position": "RB",
+   "team": "ATL"
+  }
+ },
+ {
+  "round": 1,
+  "pick_no": 3,
+  "draft_slot": 3,
+  "roster_id": 3,
+  "picked_by": "460869683914993664",
+  "player_id": "4984",
+  "metadata": {
+   "first_name": "Josh",
+   "last_name": "Allen",
+   "position": "QB",
+   "team": "BUF"
+  }
+ },
+ {
+  "round": 1,
+  "pick_no": 4,
+  "draft_slot": 4,
+  "roster_id": 4,
+  "picked_by": "",
+  "player_id": "999999",
+  "metadata": {
+   "first_name": "Nobody",
+   "last_name": "Unknown",
+   "position": "WR",
+   "team": "FA"
+  }
+ },
+ {
+  "round": 1,
+  "pick_no": 5,
+  "draft_slot": 5,
+  "roster_id": 3,
+  "picked_by": "",
+  "player_id": "9493",
+  "metadata": {
+   "first_name": "Puka",
+   "last_name": "Nacua",
+   "position": "WR",
+   "team": "LAR"
+  }
+ }
+]
