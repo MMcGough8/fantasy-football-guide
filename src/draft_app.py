@@ -438,15 +438,19 @@ if league and league.get("draft_id") and st.session_state.pop("sync_requested", 
 
 # ==================== SIDEBAR ====================
 with st.sidebar:
-    # ---- Mode toggle (top) ----
-    st.markdown("<div class='sec-head'>Mode</div>", unsafe_allow_html=True)
-    mode = st.radio(
-        "App mode",
-        options=["Draft", "In-Season"],
-        label_visibility="collapsed",
-        key="app_mode",
-    )
-    st.divider()
+    # ---- Mode toggle (top); hidden while a draft is live so it cannot be bumped ----
+    draft_live = (st.session_state.draft_info or {}).get("status") == "drafting"
+    if draft_live:
+        mode = "Draft"
+    else:
+        st.markdown("<div class='sec-head'>Mode</div>", unsafe_allow_html=True)
+        mode = st.radio(
+            "App mode",
+            options=["Draft", "In-Season"],
+            label_visibility="collapsed",
+            key="app_mode",
+        )
+        st.divider()
 
     # ---- Sleeper League ----
     st.markdown("<div class='sec-head'>Sleeper League</div>", unsafe_allow_html=True)
@@ -496,6 +500,83 @@ with st.sidebar:
                 st.session_state.league_options = None
                 save_league(cfg)
                 st.rerun()
+    st.divider()
+
+    # ---- Draft-only sidebar sections ----
+    if mode == "Draft":
+        st.markdown("<div class='sec-head'>My Roster</div>", unsafe_allow_html=True)
+        if my_roster:
+            for slot, slot_players in allocation.slots.items():
+                for p in slot_players:
+                    st.markdown(
+                        f"{badge(slot)} &nbsp; <span style='color:#ffffff;'>{p['name']}</span> "
+                        f"<span class='rank-num'>({p['team']})</span>",
+                        unsafe_allow_html=True,
+                    )
+            for p in allocation.bench:
+                st.markdown(
+                    f"{badge('BN')} &nbsp; <span style='color:#ffffff;'>{p['name']}</span> "
+                    f"<span class='rank-num'>({p['position']} · {p['team']})</span>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown(
+                "<span class='rank-num'>No picks yet</span>", unsafe_allow_html=True
+            )
+
+        # Bye week collision check
+        bye_counts = Counter(p.get("bye") for p in my_roster if p.get("bye"))
+        heavy_byes = {wk: n for wk, n in bye_counts.items() if n >= 3}
+        if heavy_byes:
+            st.markdown(
+                "<div class='sec-head'>⚠️ Bye Stacking</div>", unsafe_allow_html=True
+            )
+            for wk, n in sorted(heavy_byes.items()):
+                st.markdown(
+                    f"<span style='color:#fb923c'>Week {wk}: {n} players on bye</span>",
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown("<div class='sec-head'>Still Need</div>", unsafe_allow_html=True)
+        need_labels = [f"{pos} x{n}" for pos, n in needs.items() if n > 0]
+        st.markdown(
+            " &nbsp;".join(
+                badge(l.split()[0]) + f" <span class='mono'>{l.split()[1]}</span>"
+                for l in need_labels
+            )
+            if need_labels
+            else "<span class='mono' style='color:#34d399'>Starters filled ✓</span>",
+            unsafe_allow_html=True,
+        )
+        # ---- Positional Strengths ----
+        # A position is a "strength" if you have surplus depth AND good value there
+        strengths = []
+        for pos in Counter(p["position"] for p in allocation.bench):
+            pos_players = [p for p in my_roster if p["position"] == pos]
+            pos_vor = sum(p.get("vor", 0) for p in pos_players)
+            # Strong if you have depth beyond your starters AND meaningful total value
+            if pos_vor > 100:
+                strengths.append((pos, len(pos_players), round(pos_vor)))
+
+        if strengths:
+            st.markdown("<div class='sec-head'>Strengths</div>", unsafe_allow_html=True)
+            for pos, count, vor in strengths:
+                st.markdown(
+                    f"{badge(pos)} <span style='color:#34d399;font-size:0.8rem'>"
+                    f"{count} deep · strong ({vor} VOR)</span>",
+                    unsafe_allow_html=True,
+                )
+
+        st.markdown(
+            f"<div class='sec-head'>Bench</div>"
+            f"<span class='mono'>{len(allocation.bench)} / {bench_spots} filled</span>",
+            unsafe_allow_html=True,
+        )
+
+        st.divider()
+        with st.popover("Reset draft", use_container_width=True):
+            st.caption("Clear every mark and synced pick? Sync picks will rebuild from Sleeper.")
+            st.button("Yes, reset", on_click=reset_draft, type="primary")
     st.divider()
 
     roster_names = [p["name"] for p in my_roster]
@@ -605,84 +686,6 @@ with st.sidebar:
                 f"<div style='color:#ffffff;'>{st.session_state.answer}</div>",
                 unsafe_allow_html=True,
             )
-    # ---- Draft-only sidebar sections ----
-    if mode == "Draft":
-        st.divider()
-        st.markdown("<div class='sec-head'>My Roster</div>", unsafe_allow_html=True)
-        if my_roster:
-            for slot, slot_players in allocation.slots.items():
-                for p in slot_players:
-                    st.markdown(
-                        f"{badge(slot)} &nbsp; <span style='color:#ffffff;'>{p['name']}</span> "
-                        f"<span class='rank-num'>({p['team']})</span>",
-                        unsafe_allow_html=True,
-                    )
-            for p in allocation.bench:
-                st.markdown(
-                    f"{badge('BN')} &nbsp; <span style='color:#ffffff;'>{p['name']}</span> "
-                    f"<span class='rank-num'>({p['position']} · {p['team']})</span>",
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.markdown(
-                "<span class='rank-num'>No picks yet</span>", unsafe_allow_html=True
-            )
-
-        # Bye week collision check
-        bye_counts = Counter(p.get("bye") for p in my_roster if p.get("bye"))
-        heavy_byes = {wk: n for wk, n in bye_counts.items() if n >= 3}
-        if heavy_byes:
-            st.markdown(
-                "<div class='sec-head'>⚠️ Bye Stacking</div>", unsafe_allow_html=True
-            )
-            for wk, n in sorted(heavy_byes.items()):
-                st.markdown(
-                    f"<span style='color:#fb923c'>Week {wk}: {n} players on bye</span>",
-                    unsafe_allow_html=True,
-                )
-
-        st.markdown("<div class='sec-head'>Still Need</div>", unsafe_allow_html=True)
-        need_labels = [f"{pos} x{n}" for pos, n in needs.items() if n > 0]
-        st.markdown(
-            " &nbsp;".join(
-                badge(l.split()[0]) + f" <span class='mono'>{l.split()[1]}</span>"
-                for l in need_labels
-            )
-            if need_labels
-            else "<span class='mono' style='color:#34d399'>Starters filled ✓</span>",
-            unsafe_allow_html=True,
-        )
-        # ---- Positional Strengths ----
-        # A position is a "strength" if you have surplus depth AND good value there
-        strengths = []
-        for pos in Counter(p["position"] for p in allocation.bench):
-            pos_players = [p for p in my_roster if p["position"] == pos]
-            pos_vor = sum(p.get("vor", 0) for p in pos_players)
-            # Strong if you have depth beyond your starters AND meaningful total value
-            if pos_vor > 100:
-                strengths.append((pos, len(pos_players), round(pos_vor)))
-
-        if strengths:
-            st.markdown("<div class='sec-head'>Strengths</div>", unsafe_allow_html=True)
-            for pos, count, vor in strengths:
-                st.markdown(
-                    f"{badge(pos)} <span style='color:#34d399;font-size:0.8rem'>"
-                    f"{count} deep · strong ({vor} VOR)</span>",
-                    unsafe_allow_html=True,
-                )
-
-        st.markdown(
-            f"<div class='sec-head'>Bench</div>"
-            f"<span class='mono'>{len(allocation.bench)} / {bench_spots} filled</span>",
-            unsafe_allow_html=True,
-        )
-
-        st.divider()
-        with st.popover("Reset draft", use_container_width=True):
-            st.caption("Clear every mark and synced pick? Sync picks will rebuild from Sleeper.")
-            st.button("Yes, reset", on_click=reset_draft, type="primary")
-
-
 # ==================== HEADER ====================
 subtitle = (
     "Value-based rankings · live board"
@@ -709,16 +712,16 @@ if mode == "Draft":
             if gaps
             else ""
         )
-        st.markdown(
-            f"<span class='rank-num'>Board built for <b>{league['name']}</b>: "
-            f"{num_teams} teams, your league's scoring (yardage-game bonuses estimated "
-            f"from season totals), FLEX-aware replacement levels.{gap_note}<br>"
-            f"Projections: {projection_note}.{age_txt}</span>",
-            unsafe_allow_html=True,
-        )
-        if st.button("Refresh projections", help="Clear the cached feeds and rebuild the board (about 4s)"):
-            refresh_projections()
-            st.rerun()
+        with st.expander(f"Board: {league['name']} · {num_teams} teams · league scoring", expanded=False):
+            st.markdown(
+                f"<span class='rank-num'>Your league's scoring (yardage-game bonuses estimated "
+                f"from season totals), FLEX-aware replacement levels.{gap_note}<br>"
+                f"Projections: {projection_note}.{age_txt}</span>",
+                unsafe_allow_html=True,
+            )
+            if st.button("Refresh projections", help="Clear the cached feeds and rebuild the board (about 4s)"):
+                refresh_projections()
+                st.rerun()
     else:
         scoring_options = list(SCORING_LABELS.keys())
         st.radio(
@@ -1111,90 +1114,90 @@ if mode == "Draft":
             use_container_width=True,
         )
 
-    # ---- Draft Insights ----
-    st.markdown("<div class='sec-head'>Draft Insights</div>", unsafe_allow_html=True)
+    with st.expander("Draft Insights", expanded=False):
+        # ---- Draft Insights ----
 
-    def show_list(players, stat_label, stat_key):
-        for i, p in enumerate(players, start=1):
-            cols = st.columns([0.5, 3, 1.2, 2], vertical_alignment="center")
-            cols[0].markdown(
-                f"<span class='rank-num'>{i}</span>", unsafe_allow_html=True
-            )
-            cols[1].markdown(
-                f"<span style='color:#ffffff'>{p['name']}</span> "
-                f"<span class='rank-num'>{p['team']}</span>",
+        def show_list(players, stat_label, stat_key):
+            for i, p in enumerate(players, start=1):
+                cols = st.columns([0.5, 3, 1.2, 2], vertical_alignment="center")
+                cols[0].markdown(
+                    f"<span class='rank-num'>{i}</span>", unsafe_allow_html=True
+                )
+                cols[1].markdown(
+                    f"<span style='color:#ffffff'>{p['name']}</span> "
+                    f"<span class='rank-num'>{p['team']}</span>",
+                    unsafe_allow_html=True,
+                )
+                cols[2].markdown(
+                    badge(p["position"], p.get("tier", "")), unsafe_allow_html=True
+                )
+                cols[3].markdown(
+                    f"<span class='mono'>{stat_label}: {p.get(stat_key)}</span>",
+                    unsafe_allow_html=True,
+                )
+
+        def caption(text):
+            st.markdown(
+                f"<div style='color:#9aa4b2;font-size:0.85rem;margin-bottom:6px'>{text}</div>",
                 unsafe_allow_html=True,
             )
-            cols[2].markdown(
-                badge(p["position"], p.get("tier", "")), unsafe_allow_html=True
+
+        t1, t2, t3, t4 = st.tabs(
+            ["💤 Sleepers", "🌟 Top Rookies", "💥 Boom / Ceiling", "🛡️ High Floor"]
+        )
+        with t1:
+            caption("Drafted later than their projected value — target these late.")
+            show_list(sleepers(board), "Value", "value_gap")
+        with t2:
+            caption("Best first-year players by value over replacement.")
+            show_list(top_rookies(board), "VOR", "vor")
+        with t3:
+            caption(
+                "Scoring leans on TDs and long plays — exciting but week-to-week volatile."
             )
-            cols[3].markdown(
-                f"<span class='mono'>{stat_label}: {p.get(stat_key)}</span>",
+            show_list(boom_ceiling(board), "Boom", "boom_score")
+        with t4:
+            caption("High projected touch volume — the safest weekly floor.")
+            show_list(high_floor(board), "Touches", "touches")
+
+    with st.expander("Draft Grade", expanded=False):
+        # ---- Draft Grade ----
+        grade = grade_draft(my_roster, starters)
+        if grade is None:
+            st.markdown(
+                "<span class='rank-num'>Draft some players (mark them \"Mine\") to see your grade.</span>",
                 unsafe_allow_html=True,
             )
-
-    def caption(text):
-        st.markdown(
-            f"<div style='color:#9aa4b2;font-size:0.85rem;margin-bottom:6px'>{text}</div>",
-            unsafe_allow_html=True,
-        )
-
-    t1, t2, t3, t4 = st.tabs(
-        ["💤 Sleepers", "🌟 Top Rookies", "💥 Boom / Ceiling", "🛡️ High Floor"]
-    )
-    with t1:
-        caption("Drafted later than their projected value — target these late.")
-        show_list(sleepers(board), "Value", "value_gap")
-    with t2:
-        caption("Best first-year players by value over replacement.")
-        show_list(top_rookies(board), "VOR", "vor")
-    with t3:
-        caption(
-            "Scoring leans on TDs and long plays — exciting but week-to-week volatile."
-        )
-        show_list(boom_ceiling(board), "Boom", "boom_score")
-    with t4:
-        caption("High projected touch volume — the safest weekly floor.")
-        show_list(high_floor(board), "Touches", "touches")
-
-    # ---- Draft Grade ----
-    st.markdown("<div class='sec-head'>Draft Grade</div>", unsafe_allow_html=True)
-    grade = grade_draft(my_roster, starters)
-    if grade is None:
-        st.markdown(
-            "<span class='rank-num'>Draft some players (mark them \"Mine\") to see your grade.</span>",
-            unsafe_allow_html=True,
-        )
-    else:
-        grade_colors = {
-            "A": "#34d399",
-            "B": "#38bdf8",
-            "C": "#fbbf24",
-            "D": "#fb923c",
-            "F": "#f87171",
-        }
-        color = grade_colors.get(grade["letter"], "#94a3b8")
-        g1, g2 = st.columns([1, 3], vertical_alignment="center")
-        g1.markdown(
-            f"<div style='font-size:3.5rem;font-weight:700;color:{color};"
-            f"font-family:JetBrains Mono,monospace;text-align:center'>{grade['letter']}</div>"
-            f"<div style='text-align:center;color:#9aa4b2;font-size:0.8rem'>{grade['score']}/100</div>",
-            unsafe_allow_html=True,
-        )
-        details = (
-            f"<span style='color:#ffffff'>Total value (VOR): <b>{grade['total_vor']}</b></span> &nbsp;·&nbsp; "
-            f"<span style='color:#ffffff'>Avg per pick: <b>{grade['avg_vor']}</b></span><br>"
-            f"<span style='color:#ffffff'>Starting slots filled: "
-            f"<b>{grade['slots_filled']}/{grade['slots_total']}</b></span>"
-        )
-        if grade["missing"]:
-            details += (
-                f"<br><span style='color:#fb923c'>Still missing starters: "
-                f"{', '.join(grade['missing'])}</span>"
+        else:
+            grade_colors = {
+                "A": "#34d399",
+                "B": "#38bdf8",
+                "C": "#fbbf24",
+                "D": "#fb923c",
+                "F": "#f87171",
+            }
+            color = grade_colors.get(grade["letter"], "#94a3b8")
+            g1, g2 = st.columns([1, 3], vertical_alignment="center")
+            g1.markdown(
+                f"<div style='font-size:3.5rem;font-weight:700;color:{color};"
+                f"font-family:JetBrains Mono,monospace;text-align:center'>{grade['letter']}</div>"
+                f"<div style='text-align:center;color:#9aa4b2;font-size:0.8rem'>{grade['score']}/100</div>",
+                unsafe_allow_html=True,
             )
-        g2.markdown(
-            f"<div style='line-height:1.7'>{details}</div>", unsafe_allow_html=True
-        )
+            details = (
+                f"<span style='color:#ffffff'>Total value (VOR): <b>{grade['total_vor']}</b></span> &nbsp;·&nbsp; "
+                f"<span style='color:#ffffff'>Avg per pick: <b>{grade['avg_vor']}</b></span><br>"
+                f"<span style='color:#ffffff'>Starting slots filled: "
+                f"<b>{grade['slots_filled']}/{grade['slots_total']}</b></span>"
+            )
+            if grade["missing"]:
+                details += (
+                    f"<br><span style='color:#fb923c'>Still missing starters: "
+                    f"{', '.join(grade['missing'])}</span>"
+                )
+            g2.markdown(
+                f"<div style='line-height:1.7'>{details}</div>", unsafe_allow_html=True
+            )
 
 
 # ==================== IN-SEASON MODE ====================
