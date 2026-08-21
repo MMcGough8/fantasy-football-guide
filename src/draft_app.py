@@ -686,7 +686,9 @@ if mode == "Draft":
             auto_sync_fragment()
 
     # ---- Recommendation ----
-    pick, reason = recommend_pick(available, needs, len(my_roster), total_picks)
+    pick, reason = recommend_pick(
+        available, needs, len(my_roster), total_picks, Counter(p["position"] for p in my_roster)
+    )
     if pick:
         photo = sleeper_photo(pick.get("player_id"))
         rc1, rc2 = st.columns([1, 6], vertical_alignment="center")

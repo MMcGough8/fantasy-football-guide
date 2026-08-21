@@ -61,3 +61,24 @@ def test_only_kickers_left_early_still_returns_something():
     available = [_p("K A", "K", 15)]
     pick, _ = recommend_pick(available, {"K": 1}, roster_size=2, total_picks=TOTAL_PICKS)
     assert pick["name"] == "K A"
+
+
+def test_position_caps_block_a_third_quarterback():
+    available = [_p("QB C", "QB", 40), _p("WR D", "WR", -5)]
+    counts = {"QB": 2, "RB": 4, "WR": 2, "TE": 1, "K": 0, "DEF": 0}
+    pick, _ = recommend_pick(available, needs={}, roster_size=9, total_picks=TOTAL_PICKS, roster_counts=counts)
+    assert pick["name"] == "WR D"
+
+
+def test_position_caps_prefer_wr3_over_backup_te():
+    available = [_p("TE B", "TE", 14), _p("WR C", "WR", -12)]
+    counts = {"QB": 1, "RB": 3, "WR": 2, "TE": 2}
+    pick, _ = recommend_pick(available, needs={}, roster_size=8, total_picks=TOTAL_PICKS, roster_counts=counts)
+    assert pick["name"] == "WR C"
+
+
+def test_caps_fall_back_when_everything_is_capped():
+    available = [_p("QB C", "QB", 40)]
+    counts = {"QB": 2}
+    pick, _ = recommend_pick(available, needs={}, roster_size=9, total_picks=TOTAL_PICKS, roster_counts=counts)
+    assert pick["name"] == "QB C"
