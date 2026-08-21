@@ -99,7 +99,8 @@ html, body, [class*="css"] { font-family: 'Chakra Petch', sans-serif; }
 .badge { padding:2px 9px; border-radius:6px; font-weight:600; font-size:0.78rem; font-family:'JetBrains Mono',monospace; }
 .mono { font-family:'JetBrains Mono',monospace; color:#c9d1d9; }
 .rank-num { font-family:'JetBrains Mono',monospace; color:#4d5866; }
-.stButton > button { border-radius:8px; border:1px solid #2a3a4f; font-family:'Chakra Petch',sans-serif; letter-spacing:1px; font-weight:600; transition:all .15s ease; background:#1a2230; color:#ffffff; }
+.stButton > button, .stFormSubmitButton > button { border-radius:8px; border:1px solid #2a3a4f; font-family:'Chakra Petch',sans-serif; letter-spacing:0.5px; font-weight:600; transition:all .15s ease; background:#1a2230; color:#ffffff; white-space:nowrap; padding-left:10px; padding-right:10px; min-width:0; }
+.stButton > button p, .stFormSubmitButton > button p { white-space:nowrap; }
 .stButton > button:hover { border-color:#00e0a4; box-shadow:0 0 12px rgba(0,224,164,0.25); }
 .stButton > button[kind="primary"] { background:#00e0a4; color:#0b0f17; border-color:#00e0a4; }
 .stButton > button[kind="primary"]:hover { background:#33e8b6; color:#0b0f17; }
@@ -347,6 +348,8 @@ if "auto_sync_pref" not in st.session_state:
     st.session_state.auto_sync_pref = bool((st.session_state.league or {}).get("draft_id"))
 if "sort_pref" not in st.session_state:
     st.session_state.sort_pref = "VOR"
+if "compact_pref" not in st.session_state:
+    st.session_state.compact_pref = st.query_params.get("compact") in ("1", "true")
 
 # ---- Load board (needed by player search in both modes) ----
 # ---- League config: a connected Sleeper league overrides the manual radios ----
@@ -478,6 +481,15 @@ if league and league.get("draft_id") and st.session_state.pop("sync_requested", 
 
 # ==================== SIDEBAR ====================
 with st.sidebar:
+    # ---- Layout: compact rows for a narrow window (side by side with the draft room) ----
+    st.toggle(
+        "Compact layout (narrow window)",
+        value=st.session_state.compact_pref,
+        key="compact_widget",
+        on_change=lambda: st.session_state.update(compact_pref=st.session_state.compact_widget),
+    )
+    compact = st.session_state.compact_pref
+
     # ---- Mode toggle (top); hidden while a draft is live so it cannot be bumped ----
     draft_live = (st.session_state.draft_info or {}).get("status") == "drafting"
     if draft_live:
@@ -792,6 +804,12 @@ if mode == "Draft":
         f"<span class='status-line'>Round <b>{round_num}</b> · Pick <b>{pick_in_round}</b> · "
         f"<b>{picks_made}</b> picks made · roster <b>{len(my_roster)}</b>/{total_picks} · {your_pick}</span>"
     )
+    if compact:
+        # The sidebar is usually collapsed in a narrow window; keep the open slots visible
+        need_txt = " ".join(f"{slot}{'×' + str(n) if n > 1 else ''}" for slot, n in needs.items())
+        status_html += (
+            f"<br><span class='status-line'>Still need: <b>{need_txt or 'starters filled'}</b></span>"
+        )
 
     # reach = other teams' picks before I am on the clock (0 = my turn now);
     # horizon = picks between that turn and the one after, the "will he be there" window.
@@ -808,7 +826,11 @@ if mode == "Draft":
 
     # ---- Status strip: draft position on the left, Sleeper sync controls on the right ----
     if league and league.get("draft_id"):
-        sc3, sc1, sc2 = st.columns([5, 1.1, 1.1], vertical_alignment="center")
+        if compact:
+            sc3 = st.container()
+            sc1, sc2, _ = st.columns([1.2, 1.2, 2], vertical_alignment="center")
+        else:
+            sc3, sc1, sc2 = st.columns([5, 1.1, 1.1], vertical_alignment="center")
         sc1.button("Sync picks", use_container_width=True, on_click=request_sync)
         auto_sync = sc2.toggle(
             "Auto-sync",
@@ -917,9 +939,12 @@ if mode == "Draft":
 
         photo = sleeper_photo(pick.get("player_id"))
         with st.container(border=True):
-            rc1, rc2 = st.columns([1, 7], vertical_alignment="center")
-            if photo:
-                rc1.image(photo, width=72)
+            if compact:
+                rc2 = st.container()
+            else:
+                rc1, rc2 = st.columns([1, 7], vertical_alignment="center")
+                if photo:
+                    rc1.image(photo, width=72)
             rc2.markdown(
                 f"<div class='rec-panel'><div class='rec-label'>Recommended Pick &nbsp;{pill}</div>"
                 f"<div class='rec-name'>{pick['name']} &nbsp; {badge(pos, tier)}{tier_chip}"
@@ -927,7 +952,7 @@ if mode == "Draft":
                 f"<div class='rec-meta'>{line1}<br>{line2}</div></div>",
                 unsafe_allow_html=True,
             )
-            b1, b2, _ = st.columns([1.2, 1.2, 5], vertical_alignment="center")
+            b1, b2, _ = st.columns([1, 1, 0.01] if compact else [1.2, 1.2, 5], vertical_alignment="center")
             b1.button(
                 f"Draft {pick['name'].split()[-1]}",
                 type="primary",
@@ -968,7 +993,7 @@ if mode == "Draft":
             available, ["QB", "RB", "WR", "TE"], picks_made,
             horizon if horizon is not None else num_teams, reach_gap=reach,
         )
-        wcols = st.columns(4)
+        wcols = st.columns(2) * 2 if compact else st.columns(4)
         for col, pos in zip(wcols, ["QB", "RB", "WR", "TE"]):
             row = waiting.get(pos)
             if not row:
@@ -1196,8 +1221,12 @@ if mode == "Draft":
         )
 
         key = player_key(p)
-        c = st.columns([0.3, 3.6, 2.7, 0.8, 0.8], vertical_alignment="center")
-        c[0].markdown(f"<span class='rank-num'>{i:>2}</span>", unsafe_allow_html=True)
+        if compact:
+            cell, btn_mine, btn_taken = st.columns([6, 1, 1], vertical_alignment="center")
+            c = [None, cell, cell, btn_mine, btn_taken]
+        else:
+            c = st.columns([0.3, 3.6, 2.7, 0.8, 0.8], vertical_alignment="center")
+            c[0].markdown(f"<span class='rank-num'>{i:>2}</span>", unsafe_allow_html=True)
 
         # Cell 1: name and team on line 1, every tag on line 2 (tags never wrap mid-chip)
         last_chip = (
@@ -1218,12 +1247,14 @@ if mode == "Draft":
             if is_stack(p)
             else ""
         )
-        c[1].markdown(
-            f"<div style='{wrap_style}line-height:1.5'>"
+        rank_txt = f"<span class='rank-num' style='margin-right:6px'>{i}</span>" if compact else ""
+        name_html = (
+            f"<div style='{wrap_style}line-height:1.5'>{rank_txt}"
             f"<span style='{name_style}'>{p['name']}</span> <span class='rank-num'>{p['team']}</span>"
-            f"<div class='tags' style='margin-top:2px'>{tags}</div></div>",
-            unsafe_allow_html=True,
+            f"<div class='tags' style='margin-top:2px'>{tags}</div></div>"
         )
+        if not compact:
+            c[1].markdown(name_html, unsafe_allow_html=True)
 
         # Cell 2: value and odds on line 1, bye and market ranks on line 2
         survive = ""
@@ -1251,11 +1282,20 @@ if mode == "Draft":
             detail.append(f"ESPN {p['espn_rank']}")
         if p.get("berry_rank"):
             detail.append(f"Berry {p['berry_rank']}")
-        c[2].markdown(
+        meta_html = (
             f"<div style='line-height:1.5'><span class='mono' style='white-space:nowrap'>VOR {p['vor']:.0f} · {p['points']:.0f} pts</span>"
-            f"{survive}{split}<br><span class='rank-num'>{' · '.join(detail)}</span></div>",
-            unsafe_allow_html=True,
+            f"{survive}{split}<br><span class='rank-num'>{' · '.join(detail)}</span></div>"
         )
+        if compact:
+            # One cell: name, tags, then a single muted meta line
+            c[1].markdown(
+                name_html.replace("</div></div>", "</div>", 1)
+                + f"<div style='margin-top:2px'><span class='mono' style='white-space:nowrap;font-size:0.85rem'>VOR {p['vor']:.0f} · {p['points']:.0f}</span>"
+                + f"{survive}{split} <span class='rank-num' style='font-size:0.78rem'>· {' · '.join(detail)}</span></div></div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            c[2].markdown(meta_html, unsafe_allow_html=True)
         c[3].button(
             "Mine",
             key=f"mine_{i}_{key}",
