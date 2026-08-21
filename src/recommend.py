@@ -133,25 +133,33 @@ def fills_need(position, needs):
     )
 
 
-def recommend_pick(
-    available, needs, roster_size, total_picks, roster_counts=None,
-    picks_made=None, gap=None, reach_gap=0,
-):
-    """Return (player, reason). `roster_size` is how many picks you have made;
-    `roster_counts` is {position: count} for what you already hold.
+SHORTLIST = 4
 
-    Market-aware mode needs `picks_made`, `gap` (other teams' picks between my
-    next turn and the one after) and `reach_gap` (picks before my next turn; 0
-    when I am on the clock). Candidates are then limited to players likely to
-    reach me, and each is scored as his VOR plus the best pick I can expect the
-    turn after, so a player who will not be there outranks one who will."""
+
+def rank_candidates(
+    available, needs, roster_size, total_picks, roster_counts=None,
+    picks_made=None, gap=None, reach_gap=0, limit=SHORTLIST,
+):
+    """Scored shortlist, best first. Each entry: player, adjusted, vor, lookahead,
+    fills_need, reach (odds he reaches my pick), back (odds he is still there the
+    turn after), later (expected best at his position the turn after), mode
+    ("value" without market info, "now" on the clock, "reach" between turns).
+
+    `roster_size` is how many picks you have made; `roster_counts` is
+    {position: count} for what you already hold. Market-aware mode needs
+    `picks_made`, `gap` (other teams' picks between my next turn and the one
+    after) and `reach_gap` (picks before my next turn; 0 when I am on the clock).
+    Candidates are then limited to players likely to reach me, and each is
+    scored as his VOR plus the best pick I can expect the turn after, so a player
+    who will not be there outranks one who will."""
     if not available:
-        return None, ""
+        return []
     picks_left = total_picks - roster_size
     in_late_window = picks_left <= LATE_ROUND_WINDOW
     counts = roster_counts or {}
     use_market = picks_made is not None and gap is not None and gap > 0
     at_my_pick = (picks_made or 0) + (reach_gap or 0)
+    mode = "value" if not use_market else ("reach" if reach_gap else "now")
 
     current_round = roster_size + 1
 
@@ -188,32 +196,47 @@ def recommend_pick(
         # The lookahead is O(pool) per candidate; only the top of the board can win
         candidates = sorted(candidates, key=lambda p: p["vor"], reverse=True)[:MARKET_CANDIDATES]
 
-    def base_value(p):
-        # One-step lookahead: this pick plus the best pick I can expect next turn
-        # if this player is gone from the pool.
-        if not use_market or p["position"] in LATE_ONLY_POSITIONS:
-            return p["vor"]
-        return p["vor"] + expected_best_vor(available, None, at_my_pick, gap, exclude=p)
+    def score(p):
+        market = use_market and p["position"] not in LATE_ONLY_POSITIONS
+        lookahead = expected_best_vor(available, None, at_my_pick, gap, exclude=p) if market else 0.0
+        need = fills_need(p["position"], needs)
+        bonus = 0.0
+        if need:
+            bonus = LATE_NEED_BONUS if p["position"] in LATE_ONLY_POSITIONS else NEED_BONUS
+        return {
+            "player": p,
+            "vor": p["vor"],
+            "lookahead": round(lookahead, 1),
+            "fills_need": need,
+            "adjusted": round(p["vor"] + lookahead + bonus, 1),
+            "reach": survival_probability(p.get("adp"), picks_made or 0, reach_gap) if market else 1.0,
+            "back": survival_probability(p.get("adp"), at_my_pick, gap) if market else 1.0,
+            "later": round(expected_best_vor(available, p["position"], at_my_pick, gap, exclude=p), 1)
+            if market else None,
+            "mode": mode,
+        }
 
-    def adjusted(p):
-        value = base_value(p)
-        if not fills_need(p["position"], needs):
-            return value
-        if p["position"] in LATE_ONLY_POSITIONS:
-            return value + LATE_NEED_BONUS
-        return value + NEED_BONUS
+    ranked = sorted((score(p) for p in candidates), key=lambda c: c["adjusted"], reverse=True)
+    return ranked[:limit]
 
-    pick = max(candidates, key=adjusted)
-    reason = (
-        f"fills a need at {pick['position']}" if fills_need(pick["position"], needs) else "best value on the board"
+
+def recommend_pick(
+    available, needs, roster_size, total_picks, roster_counts=None,
+    picks_made=None, gap=None, reach_gap=0,
+):
+    """Return (player, reason): the top of `rank_candidates` with a one-line why."""
+    ranked = rank_candidates(
+        available, needs, roster_size, total_picks, roster_counts, picks_made, gap, reach_gap, limit=1
     )
-    if use_market and pick["position"] not in LATE_ONLY_POSITIONS:
-        later = expected_best_vor(available, pick["position"], at_my_pick, gap, exclude=pick)
-        if reach_gap:
-            reach = survival_probability(pick.get("adp"), picks_made, reach_gap)
-            reason += f" · {reach:.0%} to reach your pick"
-        else:
-            back = survival_probability(pick.get("adp"), picks_made, gap)
-            reason += f" · {back:.0%} to still be there next turn"
-        reason += f"; best {pick['position']} the turn after is worth about {later:.0f} VOR"
+    if not ranked:
+        return None, ""
+    top = ranked[0]
+    pick = top["player"]
+    reason = f"fills a need at {pick['position']}" if top["fills_need"] else "best value on the board"
+    if top["mode"] == "reach":
+        reason += f" · {top['reach']:.0%} to reach your pick"
+    elif top["mode"] == "now":
+        reason += f" · {top['back']:.0%} to still be there next turn"
+    if top["later"] is not None:
+        reason += f"; best {pick['position']} the turn after is worth about {top['later']:.0f} VOR"
     return pick, reason

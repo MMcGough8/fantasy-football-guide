@@ -124,3 +124,29 @@ def test_all_capped_fallback_still_keeps_kickers_out_early():
     available = [_p("QB C", "QB", 40), _p("K A", "K", 15)]
     pick, _ = recommend_pick(available, needs={"K": 1}, roster_size=5, total_picks=TOTAL_PICKS, roster_counts={"QB": 2})
     assert pick["name"] == "QB C"
+
+
+def test_rank_candidates_returns_a_scored_shortlist():
+    from recommend import rank_candidates
+
+    available = [_p("RB A", "RB", 60), _p("WR A", "WR", 55), _p("TE A", "TE", 30), _p("QB A", "QB", 20)]
+    ranked = rank_candidates(available, needs={"WR": 1}, roster_size=2, total_picks=TOTAL_PICKS)
+    names = [c["player"]["name"] for c in ranked]
+    assert names[:2] == ["WR A", "RB A"]  # WR fills a need: 55 + 30 beats 60
+    top = ranked[0]
+    assert top["fills_need"] is True
+    assert top["adjusted"] == 85
+    assert top["mode"] == "value"
+    assert all(c["reach"] == 1.0 for c in ranked)
+
+
+def test_rank_candidates_market_mode_reports_reach_and_mode():
+    from recommend import rank_candidates
+
+    available = [dict(_p("Star", "WR", 150), adp=5), dict(_p("Reachable", "WR", 60), adp=40)]
+    between = rank_candidates(available, {"WR": 2}, 1, TOTAL_PICKS, picks_made=6, gap=18, reach_gap=10)
+    assert between[0]["player"]["name"] == "Reachable" and between[0]["mode"] == "reach"
+    assert 0 < between[0]["reach"] <= 1
+    on_clock = rank_candidates(available, {"WR": 2}, 1, TOTAL_PICKS, picks_made=6, gap=18, reach_gap=0)
+    assert on_clock[0]["player"]["name"] == "Star" and on_clock[0]["mode"] == "now"
+    assert on_clock[0]["back"] < 0.1

@@ -17,7 +17,7 @@ from recommend import (
     cost_of_waiting,
     is_unavailable,
     likely_gone,
-    recommend_pick,
+    rank_candidates,
     survival_probability,
 )
 from pick_sync import apply_picks, index_board_by_player_id, next_pick_info
@@ -98,7 +98,8 @@ html, body, [class*="css"] { font-family: 'Chakra Petch', sans-serif; }
 
 def badge(pos, tier=""):
     c = POS_COLORS.get(pos, "#94a3b8")
-    return f"<span class='badge' style='background:{c}22;color:{c};border:1px solid {c}55;'>{pos}{tier}</span>"
+    label = f"{pos} T{tier}" if tier != "" and tier is not None else pos
+    return f"<span class='badge' style='background:{c}22;color:{c};border:1px solid {c}55;'>{label}</span>"
 
 
 STATUS_SHORT = {"Questionable": "Q", "Doubtful": "D", "Out": "OUT"}
@@ -797,20 +798,6 @@ if mode == "Draft":
         gap_note = "in the next round (draft order not published yet)"
         panel_gap = num_teams
 
-    # ---- Likely gone ----
-    gone = likely_gone(available, picks_made, panel_gap)
-    if gone:
-        chips = " ".join(
-            f"<span class='badge' style='background:#1f2a3a;color:#e5e7eb;border:1px solid #334155;"
-            f"margin:2px 4px 2px 0'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · "
-            f"ADP {p['adp']:.0f} · {survival_probability(p['adp'], picks_made, panel_gap):.0%} back</span></span>"
-            for p in gone
-        )
-        st.markdown(
-            f"<div style='margin:6px 0 2px'><span class='rank-num'>Likely gone {gap_note}:</span> {chips}</div>",
-            unsafe_allow_html=True,
-        )
-
     # ---- Live sync from the Sleeper draft room ----
     if league and league.get("draft_id"):
         sc1, sc2, sc3 = st.columns([1.2, 1.2, 4], vertical_alignment="center")
@@ -866,7 +853,7 @@ if mode == "Draft":
                 render_heartbeat()
 
     # ---- Recommendation ----
-    pick, reason = recommend_pick(
+    shortlist = rank_candidates(
         available,
         needs,
         len(my_roster),
@@ -876,76 +863,190 @@ if mode == "Draft":
         gap=horizon,
         reach_gap=reach,
     )
-    if pick:
+    tier_left = Counter((p["position"], p.get("tier")) for p in available)
+    pick = shortlist[0]["player"] if shortlist else None
+    if shortlist:
+        top = shortlist[0]
+        pos, tier = pick["position"], pick.get("tier")
+        if top["mode"] == "now":
+            pill_text, pill_color = "TAKE NOW", "#34d399"
+        elif top["mode"] == "reach":
+            pill_text, pill_color = f"IF HE REACHES YOU · {top['reach']:.0%}", "#fbbf24"
+        else:
+            pill_text, pill_color = "BEST VALUE", "#38bdf8"
+        pill = (
+            f"<span style='background:{pill_color}22;color:{pill_color};border:1px solid {pill_color}66;"
+            f"border-radius:4px;padding:1px 8px;font-size:0.7rem;font-weight:700;letter-spacing:1px'>{pill_text}</span>"
+        )
+        if top["fills_need"]:
+            slot = pos if needs.get(pos) else "FLEX"
+            why = f"Best value that fills your open {slot}"
+        else:
+            why = "Best value on the board"
+        left = tier_left[(pos, tier)]
+        tier_chip = (
+            f" <span class='badge' style='background:#1f2a3a;color:#e5e7eb;border:1px solid #334155'>"
+            f"{left} LEFT IN TIER</span>"
+            if tier is not None
+            else ""
+        )
+        proj = f"PROJ {pick['points']}" + (source_txt(pick) if sources_disagree(pick) else "")
+        bye = f" · Bye {pick['bye']}" if pick.get("bye") else ""
+        line1 = f"{why} · VOR {pick['vor']} · {proj}{bye}"
+        if top["mode"] == "now":
+            line2 = (
+                f"Won't wait: {top['back']:.0%} to still be there next turn · "
+                f"best {pos} then ≈ {top['later']:.0f} VOR"
+            )
+        elif top["mode"] == "reach":
+            line2 = f"If he's gone when you're up: best {pos} then ≈ {top['later']:.0f} VOR"
+        else:
+            line2 = "Draft order not published yet: ranking by value and need only."
+
         photo = sleeper_photo(pick.get("player_id"))
         rc1, rc2 = st.columns([1, 6], vertical_alignment="center")
         if photo:
             rc1.image(photo, width=80)
         rc2.markdown(
-            f"<div class='rec-panel'><div class='rec-label'>Recommended Pick</div>"
-            f"<div class='rec-name'>{pick['name']} &nbsp; {badge(pick['position'], pick.get('tier', ''))}"
+            f"<div class='rec-panel'><div class='rec-label'>Recommended Pick &nbsp;{pill}</div>"
+            f"<div class='rec-name'>{pick['name']} &nbsp; {badge(pos, tier)}{tier_chip}"
             f"{status_badge(pick)}{news_badge(pick)}</div>"
-            f"<div class='rec-meta'>{reason} · PROJ {pick['points']}{source_txt(pick)} · VOR {pick['vor']}</div></div>",
+            f"<div class='rec-meta'>{line1}<br>{line2}</div></div>",
             unsafe_allow_html=True,
         )
-    # ---- Quick Entry (fast pick marking for live drafts) ----
-    st.markdown("<div class='sec-head'>Quick Entry</div>", unsafe_allow_html=True)
-
-    def quick_mark(mine):
-        typed = (st.session_state.get("quick_entry") or "").strip().lower()
-        st.session_state.quick_matches = []
-        if not typed:
-            return
-        matches = [p for p in available if typed in p["name"].lower()]
-        if len(matches) == 1:
-            draft_player(matches[0], mine)
-            st.session_state.quick_msg = (
-                f"✓ {'Drafted' if mine else 'Marked taken'}: {matches[0]['name']}"
-            )
-        elif not matches:
-            gone = [p for p in board if typed in p["name"].lower()]
-            st.session_state.quick_msg = (
-                f"⚠️ {gone[0]['name']} is already off the board" if gone else f"⚠️ No match for '{typed}'"
-            )
-        else:
-            st.session_state.quick_matches = matches[:5]
-            st.session_state.quick_msg = "Which one?"
-
-    with st.form("quick_entry_form", clear_on_submit=True, border=False):
-        qcol1, qcol2, qcol3 = st.columns([3, 1, 1])
-        qcol1.text_input(
-            "Quick mark",
-            label_visibility="collapsed",
-            placeholder="Type a player name, Enter = Taken",
-            key="quick_entry",
-        )
-        # First submit button is what Enter triggers: Taken is the 11-of-12 case
-        qcol2.form_submit_button("Taken", key="quick_taken", on_click=quick_mark, args=(False,), use_container_width=True)
-        qcol3.form_submit_button("Mine", key="quick_mine", on_click=quick_mark, args=(True,), type="primary", use_container_width=True)
-
-    for i, m in enumerate(st.session_state.get("quick_matches") or []):
-        mc = st.columns([3, 1, 1])
-        mc[0].markdown(
-            f"{badge(m['position'])} <span style='color:#ffffff'>{m['name']}</span> "
-            f"<span class='rank-num'>{m['team']}</span>",
-            unsafe_allow_html=True,
-        )
-        mc[1].button("Taken", key=f"pick_taken_{i}", on_click=lambda m=m: (draft_player(m, False), st.session_state.update(quick_matches=[], quick_msg=f"✓ Marked taken: {m['name']}")), use_container_width=True)
-        mc[2].button("Mine", key=f"pick_mine_{i}", type="primary", on_click=lambda m=m: (draft_player(m, True), st.session_state.update(quick_matches=[], quick_msg=f"✓ Drafted: {m['name']}")), use_container_width=True)
-
-    msg_col, undo_col = st.columns([4, 1])
-    if st.session_state.get("quick_msg"):
-        color = "#34d399" if st.session_state.quick_msg.startswith(("✓", "↩")) else "#fb923c"
-        msg_col.markdown(
-            f"<span style='color:{color};font-size:0.85rem'>{st.session_state.quick_msg}</span>",
-            unsafe_allow_html=True,
-        )
-    if st.session_state.get("last_mark"):
-        undo_col.button(
-            f"↩ Undo {st.session_state.last_mark['name'].split()[-1]}",
-            on_click=undo_last_mark,
+        b1, b2, b3 = st.columns([1.4, 1.4, 4])
+        b1.button(
+            f"Draft {pick['name'].split()[-1]}",
+            type="primary",
+            on_click=draft_player,
+            args=(pick, True),
             use_container_width=True,
         )
+        b2.button("He got taken", on_click=draft_player, args=(pick, False), use_container_width=True)
+        others = shortlist[1:]
+        if others:
+            def alt_txt(c):
+                odds = ""
+                if c["mode"] == "reach":
+                    odds = f" · {c['reach']:.0%} reach"
+                elif c["mode"] == "now":
+                    odds = f" · {c['back']:.0%} back"
+                return (
+                    f"<span style='color:#ffffff'>{c['player']['name']}</span> "
+                    f"<span class='rank-num'>{c['player']['position']} {c['adjusted']:.0f}{odds}</span>"
+                )
+            b3.markdown(
+                "<span class='rank-num'>Then:</span> " + " &nbsp;·&nbsp; ".join(alt_txt(c) for c in others),
+                unsafe_allow_html=True,
+            )
+
+    # ---- Cost of waiting ----
+    if horizon == 0:
+        waiting_title = "Cost of Waiting · you pick again right away"
+    elif next_pick:
+        waiting_title = "Cost of Waiting · your next turn vs the one after"
+    else:
+        waiting_title = "Cost of Waiting · assuming one round until your next pick"
+    st.markdown(f"<div class='sec-head'>{waiting_title}</div>", unsafe_allow_html=True)
+    waiting = cost_of_waiting(
+        available, ["QB", "RB", "WR", "TE"], picks_made,
+        horizon if horizon is not None else num_teams, reach_gap=reach,
+    )
+    wcols = st.columns(4)
+    for col, pos in zip(wcols, ["QB", "RB", "WR", "TE"]):
+        row = waiting.get(pos)
+        if not row:
+            col.markdown(f"<div style='text-align:center'>{badge(pos)}</div>", unsafe_allow_html=True)
+            continue
+        hot = row["cost"] >= 20
+        color = "#fb923c" if hot else "#9aa4b2"
+        col.markdown(
+            f"<div style='text-align:center'>{badge(pos)}</div>"
+            f"<div style='font-size:0.78rem;color:#ffffff'>{row['now']['name']}"
+            f" <span class='mono'>{row['now']['vor']:.0f}</span></div>"
+            f"<div style='font-size:0.72rem;color:#9aa4b2'>if you wait: <span class='mono'>{row['later']:.0f}</span></div>"
+            f"<div style='font-size:0.78rem;color:{color};font-weight:700'>cost {row['cost']:.0f}{' ⚠️' if hot else ''}</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ---- Likely gone ----
+    gone = [p for p in likely_gone(available, picks_made, panel_gap, limit=7) if p is not pick][:6]
+    if gone:
+        chips = " ".join(
+            f"<span class='badge' style='background:#1f2a3a;color:#e5e7eb;border:1px solid #334155;"
+            f"margin:2px 4px 2px 0'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · "
+            f"ADP {p['adp']:.0f} · {survival_probability(p['adp'], picks_made, panel_gap):.0%} back</span></span>"
+            for p in gone
+        )
+        st.markdown(
+            f"<div style='margin:6px 0 2px'><span class='rank-num'>Likely gone {gap_note}"
+            f"{f' ({panel_gap} picks)' if next_pick else ''}:</span> {chips}</div>",
+            unsafe_allow_html=True,
+        )
+
+    synced_draft = bool(league and league.get("draft_id") and st.session_state.auto_sync_pref)
+    entry_box = (
+        st.expander("Manual entry · Quick Entry and Undo", expanded=False) if synced_draft else st.container()
+    )
+    with entry_box:
+        # ---- Quick Entry (fast pick marking for live drafts) ----
+        st.markdown("<div class='sec-head'>Quick Entry</div>", unsafe_allow_html=True)
+
+        def quick_mark(mine):
+            typed = (st.session_state.get("quick_entry") or "").strip().lower()
+            st.session_state.quick_matches = []
+            if not typed:
+                return
+            matches = [p for p in available if typed in p["name"].lower()]
+            if len(matches) == 1:
+                draft_player(matches[0], mine)
+                st.session_state.quick_msg = (
+                    f"✓ {'Drafted' if mine else 'Marked taken'}: {matches[0]['name']}"
+                )
+            elif not matches:
+                gone = [p for p in board if typed in p["name"].lower()]
+                st.session_state.quick_msg = (
+                    f"⚠️ {gone[0]['name']} is already off the board" if gone else f"⚠️ No match for '{typed}'"
+                )
+            else:
+                st.session_state.quick_matches = matches[:5]
+                st.session_state.quick_msg = "Which one?"
+
+        with st.form("quick_entry_form", clear_on_submit=True, border=False):
+            qcol1, qcol2, qcol3 = st.columns([3, 1, 1])
+            qcol1.text_input(
+                "Quick mark",
+                label_visibility="collapsed",
+                placeholder="Type a player name, Enter = Taken",
+                key="quick_entry",
+            )
+            # First submit button is what Enter triggers: Taken is the 11-of-12 case
+            qcol2.form_submit_button("Taken", key="quick_taken", on_click=quick_mark, args=(False,), use_container_width=True)
+            qcol3.form_submit_button("Mine", key="quick_mine", on_click=quick_mark, args=(True,), type="primary", use_container_width=True)
+
+        for i, m in enumerate(st.session_state.get("quick_matches") or []):
+            mc = st.columns([3, 1, 1])
+            mc[0].markdown(
+                f"{badge(m['position'])} <span style='color:#ffffff'>{m['name']}</span> "
+                f"<span class='rank-num'>{m['team']}</span>",
+                unsafe_allow_html=True,
+            )
+            mc[1].button("Taken", key=f"pick_taken_{i}", on_click=lambda m=m: (draft_player(m, False), st.session_state.update(quick_matches=[], quick_msg=f"✓ Marked taken: {m['name']}")), use_container_width=True)
+            mc[2].button("Mine", key=f"pick_mine_{i}", type="primary", on_click=lambda m=m: (draft_player(m, True), st.session_state.update(quick_matches=[], quick_msg=f"✓ Drafted: {m['name']}")), use_container_width=True)
+
+        msg_col, undo_col = st.columns([4, 1])
+        if st.session_state.get("quick_msg"):
+            color = "#34d399" if st.session_state.quick_msg.startswith(("✓", "↩")) else "#fb923c"
+            msg_col.markdown(
+                f"<span style='color:{color};font-size:0.85rem'>{st.session_state.quick_msg}</span>",
+                unsafe_allow_html=True,
+            )
+        if st.session_state.get("last_mark"):
+            undo_col.button(
+                f"↩ Undo {st.session_state.last_mark['name'].split()[-1]}",
+                on_click=undo_last_mark,
+                use_container_width=True,
+            )
 
     # ---- Unmatched Sleeper picks ----
     unmatched_names = (st.session_state.draft_info or {}).get("unmatched_names") or []
@@ -972,34 +1073,6 @@ if mode == "Draft":
                 args=(target, False),
                 use_container_width=True,
             )
-
-    # ---- Cost of waiting ----
-    waiting_title = (
-        "Cost of Waiting · you pick again right away"
-        if horizon == 0
-        else "Cost of Waiting · your next turn vs the one after"
-    )
-    st.markdown(f"<div class='sec-head'>{waiting_title}</div>", unsafe_allow_html=True)
-    waiting = cost_of_waiting(
-        available, ["QB", "RB", "WR", "TE"], picks_made,
-        horizon if horizon is not None else num_teams, reach_gap=reach,
-    )
-    wcols = st.columns(4)
-    for col, pos in zip(wcols, ["QB", "RB", "WR", "TE"]):
-        row = waiting.get(pos)
-        if not row:
-            col.markdown(f"<div style='text-align:center'>{badge(pos)}</div>", unsafe_allow_html=True)
-            continue
-        hot = row["cost"] >= 20
-        color = "#fb923c" if hot else "#9aa4b2"
-        col.markdown(
-            f"<div style='text-align:center'>{badge(pos)}</div>"
-            f"<div style='font-size:0.78rem;color:#ffffff'>{row['now']['name']}"
-            f" <span class='mono'>{row['now']['vor']:.0f}</span></div>"
-            f"<div style='font-size:0.72rem;color:#9aa4b2'>if you wait: <span class='mono'>{row['later']:.0f}</span></div>"
-            f"<div style='font-size:0.78rem;color:{color};font-weight:700'>cost {row['cost']:.0f}{' ⚠️' if hot else ''}</div>",
-            unsafe_allow_html=True,
-        )
 
     # ---- Board ----
     st.markdown("<div class='sec-head'>Best Available</div>", unsafe_allow_html=True)
