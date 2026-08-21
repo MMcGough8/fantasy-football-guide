@@ -82,3 +82,20 @@ def test_caps_fall_back_when_everything_is_capped():
     counts = {"QB": 2}
     pick, _ = recommend_pick(available, needs={}, roster_size=9, total_picks=TOTAL_PICKS, roster_counts=counts)
     assert pick["name"] == "QB C"
+
+
+def test_ir_and_pup_players_are_never_recommended():
+    available = [
+        dict(_p("WR IR", "WR", 90), injury_status="IR"),
+        dict(_p("TE PUP", "TE", 80), injury_status="PUP"),
+        dict(_p("RB Sus", "RB", 70), injury_status="Sus"),
+        dict(_p("WR Q", "WR", 30), injury_status="Questionable"),
+    ]
+    pick, _ = recommend_pick(available, {"WR": 2}, roster_size=1, total_picks=TOTAL_PICKS)
+    assert pick["name"] == "WR Q"
+
+
+def test_questionable_is_still_eligible():
+    available = [dict(_p("RB Q", "RB", 50), injury_status="Questionable"), _p("RB B", "RB", 40)]
+    pick, _ = recommend_pick(available, {"RB": 1}, roster_size=0, total_picks=TOTAL_PICKS)
+    assert pick["name"] == "RB Q"

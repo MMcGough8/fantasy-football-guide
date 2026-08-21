@@ -66,3 +66,16 @@ def test_scoring_summary_for_plain_ppr():
     assert text.startswith("1 per reception")
     assert "4 per passing TD" in text
     assert "bonus" not in text
+
+
+def test_analyst_prompt_flags_injuries_and_hides_ir_players():
+    available = [
+        {"name": "Healthy Guy", "position": "WR", "team": "LAR", "points": 200, "vor": 50, "tier": 2},
+        {"name": "Banged Up", "position": "RB", "team": "SF", "points": 190, "vor": 45, "tier": 2,
+         "injury_status": "Questionable", "injury_body_part": "Knee"},
+        {"name": "Out For Year", "position": "WR", "team": "SF", "points": 180, "vor": 40, "tier": 2,
+         "injury_status": "IR"},
+    ]
+    prompt = build_analyst_prompt("Who?", available=available, needs={"WR": 1})
+    assert "Banged Up" in prompt and "Questionable (Knee)" in prompt
+    assert "Out For Year" not in prompt

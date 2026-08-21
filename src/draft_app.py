@@ -11,7 +11,7 @@ from draft_board import build_board
 from categories import sleepers, top_rookies, boom_ceiling, high_floor
 from grader import grade_draft
 from roster_slots import allocate_slots
-from recommend import LATE_ONLY_POSITIONS, LATE_ROUND_WINDOW, recommend_pick
+from recommend import LATE_ONLY_POSITIONS, LATE_ROUND_WINDOW, is_unavailable, recommend_pick
 from pick_sync import apply_picks, index_board_by_player_id, next_pick_info
 import sleeper_league
 from sleeper_league import SleeperError
@@ -89,6 +89,34 @@ html, body, [class*="css"] { font-family: 'Chakra Petch', sans-serif; }
 def badge(pos, tier=""):
     c = POS_COLORS.get(pos, "#94a3b8")
     return f"<span class='badge' style='background:{c}22;color:{c};border:1px solid {c}55;'>{pos}{tier}</span>"
+
+
+STATUS_SHORT = {"Questionable": "Q", "Doubtful": "D", "Out": "OUT"}
+NEWS_FRESH_HOURS = 24
+
+
+def status_badge(p):
+    """Amber tag for an injury status; red for statuses the recommender excludes."""
+    status = p.get("injury_status")
+    if not status:
+        return ""
+    c = "#f87171" if is_unavailable(p) else "#fbbf24"
+    label = STATUS_SHORT.get(status, status)
+    if p.get("injury_body_part"):
+        label += f" · {p['injury_body_part']}"
+    return f" <span class='badge' style='background:{c}22;color:{c};border:1px solid {c}55;'>{label}</span>"
+
+
+def news_badge(p):
+    """Flag players with news in the last day; Sleeper stamps news_updated in ms."""
+    stamp = p.get("news_updated")
+    if not stamp:
+        return ""
+    hours = (time.time() - stamp / 1000) / 3600
+    if hours > NEWS_FRESH_HOURS:
+        return ""
+    age = f"{int(hours)}h" if hours >= 1 else f"{int(hours * 60)}m"
+    return f" <span style='font-size:0.7rem;color:#fb923c' title='News updated {age} ago'>🔥 {age}</span>"
 
 
 def sleeper_photo(player_id):
@@ -762,7 +790,8 @@ if mode == "Draft":
             rc1.image(photo, width=80)
         rc2.markdown(
             f"<div class='rec-panel'><div class='rec-label'>Recommended Pick</div>"
-            f"<div class='rec-name'>{pick['name']} &nbsp; {badge(pick['position'], pick.get('tier', ''))}</div>"
+            f"<div class='rec-name'>{pick['name']} &nbsp; {badge(pick['position'], pick.get('tier', ''))}"
+            f"{status_badge(pick)}{news_badge(pick)}</div>"
             f"<div class='rec-meta'>{reason} · PROJ {pick['points']}{source_txt(pick)} · VOR {pick['vor']}</div></div>",
             unsafe_allow_html=True,
         )
@@ -957,7 +986,10 @@ if mode == "Draft":
                 f"<span class='rank-num'>{p['team']}</span>",
                 unsafe_allow_html=True,
             )
-        c[2].markdown(badge(p["position"], p.get("tier", "")), unsafe_allow_html=True)
+        c[2].markdown(
+            badge(p["position"], p.get("tier", "")) + status_badge(p) + news_badge(p),
+            unsafe_allow_html=True,
+        )
         bye_txt = f" · Bye {p['bye']}" if p.get("bye") else ""
         ranks_txt = ""
         if p.get("sleeper_rank"):

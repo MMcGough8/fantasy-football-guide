@@ -8,6 +8,13 @@ LATE_ONLY_POSITIONS = ("K", "DEF")
 # Most of a position you would ever roster in a 14-round draft; stops pure VOR
 # from stacking backup QBs and TEs once the starters are filled.
 POSITION_CAPS = {"QB": 2, "RB": 6, "WR": 6, "TE": 2, "K": 1, "DEF": 1}
+# Sleeper injury statuses that mean the player is not playing soon. Questionable,
+# Doubtful and Out are preseason noise and stay eligible.
+EXCLUDED_STATUSES = {"IR", "PUP", "Sus", "NA", "DNR", "COV"}
+
+
+def is_unavailable(p):
+    return p.get("injury_status") in EXCLUDED_STATUSES
 
 
 def fills_need(position, needs):
@@ -30,6 +37,8 @@ def recommend_pick(available, needs, roster_size, total_picks, roster_counts=Non
 
     def is_candidate(p):
         pos = p["position"]
+        if is_unavailable(p):
+            return False
         if counts.get(pos, 0) >= POSITION_CAPS.get(pos, 99):
             return False
         if pos not in LATE_ONLY_POSITIONS:

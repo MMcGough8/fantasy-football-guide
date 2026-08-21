@@ -2,6 +2,8 @@ import os
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
+from recommend import is_unavailable
+
 load_dotenv()
 
 # Override in .env. FAST handles news lookups (cheap, frequent); ANALYST answers
@@ -65,8 +67,12 @@ def _board_row(p):
     if len(by_source) > 1:
         sources = " (" + " / ".join(f"{SOURCE_LABELS.get(s, s)} {v}" for s, v in by_source.items()) + ")"
     bye = f" bye {p['bye']}" if p.get("bye") else ""
+    injury = ""
+    if p.get("injury_status"):
+        part = f" ({p['injury_body_part']})" if p.get("injury_body_part") else ""
+        injury = f" [{p['injury_status']}{part}]"
     return (
-        f"{p['name']} {p['position']} {p['team']}{bye}: proj {p['points']}{sources}, "
+        f"{p['name']} {p['position']} {p['team']}{bye}{injury}: proj {p['points']}{sources}, "
         f"VOR {p['vor']}, tier {p.get('tier', '?')}"
     )
 
@@ -104,7 +110,8 @@ def build_analyst_prompt(
 
     board_block = ""
     if available:
-        rows = "\n".join(_board_row(p) for p in available[:BOARD_ROWS_FOR_ANALYST])
+        draftable = [p for p in available if not is_unavailable(p)]
+        rows = "\n".join(_board_row(p) for p in draftable[:BOARD_ROWS_FOR_ANALYST])
         board_block = (
             f"\nTOP AVAILABLE PLAYERS (already scored with this league's rules; "
             f"VOR = points over the replacement starter at that position; the bracket "

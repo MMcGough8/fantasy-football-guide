@@ -180,3 +180,19 @@ def test_bye_weeks_ignore_canceled_games(monkeypatch):
     draft_board._bye_cache = None
     assert byes["DAL"] == 2  # the canceled week-2 game does not count as played
     assert byes["LAR"] == 1
+
+
+def test_fetch_position_carries_injury_and_news_fields(monkeypatch, projections):
+    hurt = dict(projections)
+    gibbs = dict(projections["RB"][0])
+    gibbs["player"] = dict(gibbs["player"], injury_status="Questionable", injury_body_part="Knee",
+                           injury_notes="Surgery", news_updated=1787212236910)
+    hurt["RB"] = [gibbs] + projections["RB"][1:]
+    monkeypatch.setattr(draft_board.requests, "get", _fake_projections(hurt))
+    players = fetch_position("RB", "pts_ppr")
+    g = next(p for p in players if p["name"] == "Jahmyr Gibbs")
+    assert g["injury_status"] == "Questionable"
+    assert g["injury_body_part"] == "Knee"
+    assert g["news_updated"] == 1787212236910
+    b = next(p for p in players if p["name"] == "Bijan Robinson")
+    assert b["injury_status"] is None
