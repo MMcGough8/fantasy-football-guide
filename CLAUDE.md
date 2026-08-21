@@ -75,6 +75,19 @@ Both live in `src/` and are read only by `espn_ranks.py`, which caches them in m
 
 Both JSONs use `"DST"` for defenses; the board uses `"DEF"`. Matching is by name so this does not break the join directly.
 
+## Simulating drafts
+
+`src/simulate.py` drafts a full 14-round snake with 11 bots on assigned styles (`STRATEGIES`: adp, zero_rb, rb_heavy, qb_early, te_early, homer, board) and the owner on the real recommender with the real opponent-needs model; `SCENARIOS` are named leagues (balanced, market, zero_rb_league, rb_run, qb_early_league, sharks). It builds the live board once and caches it to `/tmp/sim_board.json`.
+
+```bash
+.venv/bin/python src/simulate.py --list
+.venv/bin/python src/simulate.py --slot 6 --scenario rb_run --compare          # app vs pure VOR vs market, same seed
+.venv/bin/python src/simulate.py --slot 6 --scenario balanced --team 3=zero_rb  # override one team
+.venv/bin/python src/simulate.py --slot 6 --scenario balanced --emit /tmp/simlive --stream 8 --clock 30
+```
+
+`--emit DIR` writes Sleeper-shaped `draft.json`/`picks.json`; with `--stream` it plays the draft out in real time (pre-draft, then the order is published, then a pick every N seconds with an extra `--clock` pause on the owner's turn). Paste `file:DIR` into the sidebar's "Rehearse with a mock draft" box and the app syncs from the files exactly as it would from Sleeper (`load_replay` in `draft_app.py`). This is how the live transition (order appearing, TAKE NOW, countdown) was verified.
+
 ## Things that will trip you up
 
 - **Season year is hardcoded** as `SEASON` in both `draft_board.py` (projections, byes) and `draft_app.py` (which Sleeper leagues to list). ESPN year comes from `.env` `YEAR`. Both rankings JSONs are preseason snapshots that must be regenerated each year.

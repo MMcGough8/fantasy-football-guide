@@ -461,31 +461,31 @@ board_details_html = (
     f"totals), FLEX-aware replacement levels.{gap_note}<br>Projections: {projection_note}.{age_txt}</span>"
 )
 
-# Synced picks are the truth from Sleeper; manual Mine/Taken marks layer on top.
-synced_taken = st.session_state.synced_taken
-drafted_keys = st.session_state.drafted | synced_taken
-my_roster = st.session_state.synced_mine + [
-    p for p in st.session_state.my_roster if player_key(p) not in synced_taken
-]
-available = [p for p in board if player_key(p) not in drafted_keys]
-available.sort(key=lambda p: p["vor"], reverse=True)
-
-allocation = allocate_slots(my_roster, starters)
-needs = allocation.needs
-
-
-
-
 def active_draft_id():
     """The league's draft, or a mock draft the owner is rehearsing with."""
     return st.session_state.get("rehearsal_draft_id") or league["draft_id"]
 
 
+def load_replay(path):
+    """A simulated draft written by simulate.py --emit (draft.json + picks.json)."""
+    try:
+        with open(os.path.join(path, "draft.json")) as f:
+            draft = json.load(f)
+        with open(os.path.join(path, "picks.json")) as f:
+            picks = json.load(f)
+    except (OSError, ValueError) as e:
+        raise SleeperError(f"Couldn't read the replay at {path} ({e})") from e
+    return draft, picks
+
+
 def sync_picks_from_sleeper():
     """Mark every pick from the live Sleeper draft. Returns True if anything changed."""
     draft_id = active_draft_id()
-    draft = sleeper_league.get_draft(draft_id)
-    picks = sleeper_league.get_draft_picks(draft_id)
+    if draft_id.startswith("file:"):
+        draft, picks = load_replay(draft_id[len("file:"):])
+    else:
+        draft = sleeper_league.get_draft(draft_id)
+        picks = sleeper_league.get_draft_picks(draft_id)
     # Who I am in this draft: the published order is authoritative (and the only
     # option in a mock draft); league rosters are the fallback before it is published.
     roster_id = sleeper_league.my_roster_id_from_draft(draft, league["user_id"])
@@ -555,6 +555,21 @@ if league and league.get("draft_id") and st.session_state.pop("sync_requested", 
         st.session_state.sync_error = True
 
 
+# Synced picks are the truth from Sleeper; manual Mine/Taken marks layer on top.
+synced_taken = st.session_state.synced_taken
+drafted_keys = st.session_state.drafted | synced_taken
+my_roster = st.session_state.synced_mine + [
+    p for p in st.session_state.my_roster if player_key(p) not in synced_taken
+]
+available = [p for p in board if player_key(p) not in drafted_keys]
+available.sort(key=lambda p: p["vor"], reverse=True)
+
+allocation = allocate_slots(my_roster, starters)
+needs = allocation.needs
+
+
+
+
 # Total picks follow the draft being synced (a mock may have a different round count)
 total_picks = (st.session_state.draft_info or {}).get("rounds") or (sum(starters.values()) + bench_spots)
 
@@ -615,9 +630,10 @@ with st.sidebar:
             st.button("Yes, disconnect", on_click=forget_league, type="primary")
 
         def start_rehearsal():
-            draft_id = sleeper_league.parse_draft_id(st.session_state.get("rehearsal_input", ""))
+            raw = (st.session_state.get("rehearsal_input") or "").strip()
+            draft_id = raw if raw.startswith("file:") else sleeper_league.parse_draft_id(raw)
             if not draft_id:
-                st.session_state.rehearsal_error = "Paste a Sleeper draft link or id"
+                st.session_state.rehearsal_error = "Paste a Sleeper draft link or id, or file:/path from simulate.py --emit"
                 return
             st.session_state.rehearsal_draft_id = draft_id
             st.session_state.rehearsal_error = None
@@ -629,8 +645,9 @@ with st.sidebar:
 
         with st.expander("Rehearse with a mock draft", expanded=bool(st.session_state.get("rehearsal_draft_id"))):
             st.caption(
-                "Start a mock draft in the Sleeper app, paste its link here, and the app syncs "
-                "that draft's picks onto this league's board and scoring."
+                "Start a mock draft in the Sleeper app and paste its link, or run "
+                "`simulate.py --emit DIR --stream 8` and paste `file:DIR`. Either way the picks "
+                "sync onto this league's board and scoring."
             )
             if st.session_state.get("rehearsal_draft_id"):
                 st.markdown(
