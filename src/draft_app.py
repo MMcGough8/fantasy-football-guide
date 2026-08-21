@@ -11,7 +11,15 @@ from draft_board import build_board
 from categories import sleepers, top_rookies, boom_ceiling, high_floor
 from grader import grade_draft
 from roster_slots import allocate_slots
-from recommend import LATE_ONLY_POSITIONS, LATE_ROUND_WINDOW, is_unavailable, recommend_pick
+from recommend import (
+    LATE_ONLY_POSITIONS,
+    LATE_ROUND_WINDOW,
+    cost_of_waiting,
+    is_unavailable,
+    likely_gone,
+    recommend_pick,
+    survival_probability,
+)
 from pick_sync import apply_picks, index_board_by_player_id, next_pick_info
 import sleeper_league
 from sleeper_league import SleeperError
@@ -736,6 +744,29 @@ if mode == "Draft":
     m3.markdown(stat_card("Your Roster", len(my_roster)), unsafe_allow_html=True)
     m4.markdown(stat_card("Your Pick In", your_pick), unsafe_allow_html=True)
 
+    # Other teams' picks before my next turn: the horizon for "will he be there"
+    if next_pick:
+        gap = next_pick["picks_until_mine"] or next_pick["picks_until_following"]
+        gap_note = "before your next pick"
+    else:
+        gap = None
+        gap_note = "in the next round (draft order not published yet)"
+    panel_gap = gap or num_teams
+
+    # ---- Likely gone ----
+    gone = likely_gone(available, picks_made, panel_gap)
+    if gone:
+        chips = " ".join(
+            f"<span class='badge' style='background:#1f2a3a;color:#e5e7eb;border:1px solid #334155;"
+            f"margin:2px 4px 2px 0'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · "
+            f"ADP {p['adp']:.0f} · {survival_probability(p['adp'], picks_made, panel_gap):.0%} back</span></span>"
+            for p in gone
+        )
+        st.markdown(
+            f"<div style='margin:6px 0 2px'><span class='rank-num'>Likely gone {gap_note}:</span> {chips}</div>",
+            unsafe_allow_html=True,
+        )
+
     # ---- Live sync from the Sleeper draft room ----
     if league and league.get("draft_id"):
         sc1, sc2, sc3 = st.columns([1.2, 1.2, 4], vertical_alignment="center")
@@ -781,7 +812,13 @@ if mode == "Draft":
 
     # ---- Recommendation ----
     pick, reason = recommend_pick(
-        available, needs, len(my_roster), total_picks, Counter(p["position"] for p in my_roster)
+        available,
+        needs,
+        len(my_roster),
+        total_picks,
+        Counter(p["position"] for p in my_roster),
+        picks_made=picks_made,
+        gap=gap,
     )
     if pick:
         photo = sleeper_photo(pick.get("player_id"))
@@ -849,35 +886,25 @@ if mode == "Draft":
             unsafe_allow_html=True,
         )
 
-        # ---- Positional Scarcity (tiers remaining) ----
+    # ---- Cost of waiting ----
     st.markdown(
-        "<div class='sec-head'>Position Scarcity · Tiers Left</div>",
-        unsafe_allow_html=True,
+        f"<div class='sec-head'>Cost of Waiting · {gap_note}</div>", unsafe_allow_html=True
     )
-
-    scarcity_cols = st.columns(6)
-    for col, pos in zip(scarcity_cols, ["QB", "RB", "WR", "TE", "K", "DEF"]):
-        pos_avail = [p for p in available if p["position"] == pos]
-        # Count how many remain in each within-position tier
-        tier_counts = {}
-        for p in pos_avail:
-            t = p.get("tier", "?")
-            tier_counts[t] = tier_counts.get(t, 0) + 1
-
-        # Build a small readout, top 3 tiers
-        lines = ""
-        for t in sorted(k for k in tier_counts if isinstance(k, int))[:3]:
-            n = tier_counts[t]
-            # Warn (orange) when a top tier is nearly gone
-            warn = n <= 2 and t <= 2
-            color = "#fb923c" if warn else "#9aa4b2"
-            flag = " ⚠️" if warn else ""
-            lines += (
-                f"<div style='color:{color};font-size:0.72rem'>T{t}: {n}{flag}</div>"
-            )
-
+    waiting = cost_of_waiting(available, ["QB", "RB", "WR", "TE"], picks_made, panel_gap)
+    wcols = st.columns(4)
+    for col, pos in zip(wcols, ["QB", "RB", "WR", "TE"]):
+        row = waiting.get(pos)
+        if not row:
+            col.markdown(f"<div style='text-align:center'>{badge(pos)}</div>", unsafe_allow_html=True)
+            continue
+        hot = row["cost"] >= 20
+        color = "#fb923c" if hot else "#9aa4b2"
         col.markdown(
-            f"<div style='text-align:center'>{badge(pos)}</div>{lines}",
+            f"<div style='text-align:center'>{badge(pos)}</div>"
+            f"<div style='font-size:0.78rem;color:#ffffff'>{row['now']['name']}"
+            f" <span class='mono'>{row['now']['vor']:.0f}</span></div>"
+            f"<div style='font-size:0.72rem;color:#9aa4b2'>if you wait: <span class='mono'>{row['later']:.0f}</span></div>"
+            f"<div style='font-size:0.78rem;color:{color};font-weight:700'>cost {row['cost']:.0f}{' ⚠️' if hot else ''}</div>",
             unsafe_allow_html=True,
         )
 
@@ -991,6 +1018,8 @@ if mode == "Draft":
             unsafe_allow_html=True,
         )
         bye_txt = f" · Bye {p['bye']}" if p.get("bye") else ""
+        if p.get("adp") and p["position"] not in LATE_ONLY_POSITIONS:
+            bye_txt += f" · {survival_probability(p['adp'], picks_made, panel_gap):.0%} back"
         ranks_txt = ""
         if p.get("sleeper_rank"):
             ranks_txt += f" · Sleeper #{p['sleeper_rank']}"

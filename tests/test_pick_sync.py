@@ -84,7 +84,10 @@ def test_next_pick_info_snake_math(draft):
     d["settings"] = {**draft["settings"], "teams": 12, "rounds": 14}
     # Pick 1 is on the clock, I'm slot 3 of 12: two picks until mine
     info = next_pick_info(d, picks_made=0, my_user_id=ME)
-    assert info == {"my_slot": 3, "on_clock_slot": 1, "on_clock_user_id": "u1", "picks_until_mine": 2, "round": 1}
+    assert info == {
+        "my_slot": 3, "on_clock_slot": 1, "on_clock_user_id": "u1",
+        "picks_until_mine": 2, "picks_until_following": 18, "round": 1,
+    }
     # After my pick 3, round 1 has 9 more picks, round 2 snakes back: slot 12..1,
     # so my next turn is round 2 pick 10 (overall 22), 18 picks away from pick 4.
     info = next_pick_info(d, picks_made=3, my_user_id=ME)
@@ -101,3 +104,18 @@ def test_next_pick_info_after_final_pick(draft):
     d["draft_order"] = {ME: 1}
     d["settings"] = {**draft["settings"], "teams": 2, "rounds": 1}
     assert next_pick_info(d, picks_made=2, my_user_id=ME) is None
+
+
+def test_next_pick_info_reports_gap_to_the_following_turn(draft):
+    d = dict(draft)
+    d["draft_order"] = {ME: 3, "u1": 1, "u2": 2}
+    d["settings"] = {**draft["settings"], "teams": 12, "rounds": 14}
+    # On the clock at pick 3 (slot 3): next turn is round 2 pick 10 = overall 22,
+    # so 18 other picks happen in between.
+    info = next_pick_info(d, picks_made=2, my_user_id=ME)
+    assert info["picks_until_mine"] == 0
+    assert info["picks_until_following"] == 18
+    # Two picks before my turn: following-turn gap is measured from my upcoming pick
+    info = next_pick_info(d, picks_made=0, my_user_id=ME)
+    assert info["picks_until_mine"] == 2
+    assert info["picks_until_following"] == 18

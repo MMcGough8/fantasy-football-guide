@@ -64,16 +64,19 @@ def next_pick_info(draft, picks_made, my_user_id):
     my_slot = order[my_user_id]
     round_num, on_clock_slot = _slot_for_pick(pick_no, num_teams, draft_type)
 
-    picks_until_mine = 0
-    for n in range(pick_no, total_picks + 1):
-        if _slot_for_pick(n, num_teams, draft_type)[1] == my_slot:
-            break
-        picks_until_mine += 1
+    my_turns = [
+        n for n in range(pick_no, total_picks + 1)
+        if _slot_for_pick(n, num_teams, draft_type)[1] == my_slot
+    ]
+    picks_until_mine = (my_turns[0] - pick_no) if my_turns else total_picks - pick_no + 1
+    # Picks by other teams between my upcoming turn and the one after it
+    picks_until_following = (my_turns[1] - my_turns[0] - 1) if len(my_turns) > 1 else 0
 
     return {
         "my_slot": my_slot,
         "on_clock_slot": on_clock_slot,
         "on_clock_user_id": slot_to_user.get(on_clock_slot),
         "picks_until_mine": picks_until_mine,
+        "picks_until_following": picks_until_following,
         "round": round_num,
     }
