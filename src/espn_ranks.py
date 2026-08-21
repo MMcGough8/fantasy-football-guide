@@ -12,6 +12,16 @@ def _normalize(name):
     return n.strip()
 
 
+def match_key(name, position):
+    """Cross-source player key. Defenses match on nickname because sites disagree
+    on the form ("Houston Texans" vs "Texans D/ST")."""
+    key = _normalize(name)
+    if position in ("DEF", "DST"):
+        tokens = [t for t in key.replace("/", " ").split() if t not in ("d", "st", "dst")]
+        return tokens[-1] if tokens else key
+    return key
+
+
 def _load(filename):
     path = os.path.join(os.path.dirname(__file__), filename)
     try:
@@ -39,10 +49,15 @@ def load_berry_ranks():
     return _berry_cache
 
 
-def attach_ranks(board):
-    """Attach ESPN + Berry ranks, a three-source consensus, and disagreement flags."""
+def attach_ranks(board, live_espn_ranks=None):
+    """Attach ESPN + Berry ranks, a three-source consensus, and disagreement flags.
+
+    `live_espn_ranks` ({match_key: rank} from ESPN's API) wins over the committed
+    espn_rankings.json snapshot when present.
+    """
     espn = load_espn_ranks()
     berry = load_berry_ranks()
+    live = live_espn_ranks or {}
 
     # Sleeper rank = each player's VOR order on the board
     by_vor = sorted(board, key=lambda p: p.get("vor", 0), reverse=True)
@@ -51,7 +66,7 @@ def attach_ranks(board):
 
     for p in board:
         key = _normalize(p["name"])
-        p["espn_rank"] = espn.get(key)
+        p["espn_rank"] = live.get(match_key(p["name"], p["position"]), espn.get(key))
         p["berry_rank"] = berry.get(key)
 
         # Consensus = average of whatever sources are available for this player

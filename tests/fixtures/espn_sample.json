@@ -1,0 +1,1796 @@
+{
+ "QB": {
+  "players": [
+   {
+    "player": {
+     "fullName": "Josh Allen",
+     "defaultPositionId": 1,
+     "proTeamId": 2,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 22,
+       "published": false,
+       "rank": 36,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 22,
+       "published": false,
+       "rank": 36,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 20,
+       "published": false,
+       "rank": 24,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 59,
+       "published": false,
+       "rank": 1,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 22.1
+     },
+     "stats": [
+      {
+       "appliedAverage": 21.74530648752941,
+       "appliedTotal": 369.67021029,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "0": 508.6697767,
+        "1": 340.1107698,
+        "2": 168.559007,
+        "3": 3946.421042,
+        "4": 26.26616468,
+        "5": 789.0,
+        "6": 394.0,
+        "7": 197.0,
+        "8": 157.0,
+        "9": 78.0,
+        "10": 39.0,
+        "11": 68.0,
+        "12": 34.0,
+        "15": 3.120895536,
+        "16": 2.039505233,
+        "17": 2.885013682,
+        "18": 0.389689703,
+        "19": 2.098061094,
+        "20": 11.578569,
+        "21": 0.668627832,
+        "22": 232.1424142,
+        "23": 116.386929,
+        "24": 579.902447,
+        "25": 12.45115907,
+        "26": 0.593269424,
+        "27": 115.0,
+        "28": 57.0,
+        "29": 28.0,
+        "30": 23.0,
+        "31": 11.0,
+        "33": 23.0,
+        "34": 11.0,
+        "35": 0.226962171,
+        "36": 0.158873519,
+        "37": 0.865318125,
+        "38": 0.0295,
+        "39": 4.982539295,
+        "40": 34.11190865,
+        "62": 2.691330519,
+        "63": 0.038816375,
+        "64": 36.12064373,
+        "65": 7.268985322,
+        "66": 1.552918052,
+        "68": 8.821903374,
+        "69": 3.489112955,
+        "70": 0.714342304,
+        "72": 4.203455259,
+        "73": 15.78202426,
+        "210": 17.0,
+        "211": 38.0058204
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Lamar Jackson",
+     "defaultPositionId": 1,
+     "proTeamId": 33,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 10,
+       "published": false,
+       "rank": 58,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 10,
+       "published": false,
+       "rank": 58,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 18,
+       "published": false,
+       "rank": 32,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 58,
+       "published": false,
+       "rank": 5,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 38.68
+     },
+     "stats": [
+      {
+       "appliedAverage": 18.994609118,
+       "appliedTotal": 322.90835501,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "0": 466.6446326,
+        "1": 302.842837,
+        "2": 163.8017956,
+        "3": 3887.512262,
+        "4": 26.02822896,
+        "5": 777.0,
+        "6": 388.0,
+        "7": 194.0,
+        "8": 155.0,
+        "9": 77.0,
+        "10": 38.0,
+        "11": 60.0,
+        "12": 30.0,
+        "15": 3.037151799,
+        "16": 1.984778701,
+        "17": 2.743239805,
+        "18": 0.370539769,
+        "19": 0.850784573,
+        "20": 9.730293576,
+        "21": 0.648979579,
+        "22": 228.6771919,
+        "23": 122.1740752,
+        "24": 671.2387406,
+        "25": 3.689931618,
+        "26": 0.095542397,
+        "27": 134.0,
+        "28": 67.0,
+        "29": 33.0,
+        "30": 26.0,
+        "31": 13.0,
+        "33": 24.0,
+        "34": 12.0,
+        "35": 0.238950179,
+        "36": 0.167265125,
+        "37": 1.16,
+        "38": 0.0395,
+        "39": 5.494117629,
+        "40": 39.4846318,
+        "62": 0.94632697,
+        "63": 0.039924037,
+        "64": 39.50509297,
+        "65": 7.309324834,
+        "66": 1.764319839,
+        "68": 9.073644673,
+        "69": 3.50847592,
+        "70": 0.811587126,
+        "72": 4.320063046,
+        "73": 14.05035662,
+        "210": 17.0,
+        "211": 34.90989617
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Drake Maye",
+     "defaultPositionId": 1,
+     "proTeamId": 17,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 10,
+       "published": false,
+       "rank": 60,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 10,
+       "published": false,
+       "rank": 60,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 15,
+       "published": false,
+       "rank": 39,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 48,
+       "published": false,
+       "rank": 13,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 47.33
+     },
+     "stats": [
+      {
+       "appliedAverage": 18.78809464447059,
+       "appliedTotal": 319.39760896,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "0": 519.5783008,
+        "1": 355.0024824,
+        "2": 164.5758184,
+        "3": 4096.10591,
+        "4": 27.00975709,
+        "5": 819.0,
+        "6": 409.0,
+        "7": 204.0,
+        "8": 163.0,
+        "9": 81.0,
+        "10": 40.0,
+        "11": 71.0,
+        "12": 35.0,
+        "15": 3.343588071,
+        "16": 2.185034804,
+        "17": 3.313824611,
+        "18": 0.447610816,
+        "19": 1.031169636,
+        "20": 11.17031784,
+        "21": 0.683251171,
+        "22": 240.9474065,
+        "23": 101.0425866,
+        "24": 531.9216719,
+        "25": 4.050607622,
+        "26": 0.144072582,
+        "27": 106.0,
+        "28": 53.0,
+        "29": 26.0,
+        "30": 21.0,
+        "31": 10.0,
+        "33": 20.0,
+        "34": 10.0,
+        "35": 0.195489554,
+        "36": 0.136842688,
+        "37": 0.726948342,
+        "38": 0.0248,
+        "39": 5.264331503,
+        "40": 31.28951011,
+        "62": 1.175242217,
+        "63": 0.047395978,
+        "64": 46.63320794,
+        "65": 9.140632611,
+        "66": 1.631180483,
+        "68": 10.77181309,
+        "69": 4.387503653,
+        "70": 0.750343022,
+        "72": 5.137846675,
+        "73": 16.30816452,
+        "210": 17.0,
+        "211": 29.19089003
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "RB": {
+  "players": [
+   {
+    "player": {
+     "fullName": "Jahmyr Gibbs",
+     "defaultPositionId": 2,
+     "proTeamId": 8,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 57,
+       "published": false,
+       "rank": 1,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 57,
+       "published": false,
+       "rank": 1,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 36,
+       "published": false,
+       "rank": 3,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 57,
+       "published": false,
+       "rank": 7,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 1.5
+     },
+     "stats": [
+      {
+       "appliedAverage": 21.462553754823528,
+       "appliedTotal": 364.86341383,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "23": 283.0662421,
+        "24": 1372.596151,
+        "25": 14.45294368,
+        "26": 0.27214044,
+        "27": 274.0,
+        "28": 137.0,
+        "29": 68.0,
+        "30": 54.0,
+        "31": 27.0,
+        "33": 56.0,
+        "34": 28.0,
+        "35": 0.599171671,
+        "36": 0.41942017,
+        "37": 4.863303062,
+        "38": 0.165965875,
+        "39": 4.849028059,
+        "40": 80.74095005,
+        "42": 545.917266,
+        "43": 3.376143098,
+        "44": 0.074543349,
+        "45": 0.069599281,
+        "46": 0.04548313,
+        "47": 109.0,
+        "48": 54.0,
+        "49": 27.0,
+        "50": 21.0,
+        "51": 10.0,
+        "53": 67.79514079,
+        "56": 0.486302151,
+        "57": 0.015040273,
+        "58": 86.00388027,
+        "60": 8.052454197,
+        "61": 32.11278035,
+        "62": 0.346683788,
+        "63": 0.011568001,
+        "66": 2.121085302,
+        "67": 0.508005743,
+        "68": 2.629091045,
+        "70": 0.975699239,
+        "71": 0.284483216,
+        "72": 1.260182455,
+        "73": 1.260182455,
+        "210": 17.0,
+        "211": 76.39001102,
+        "212": 30.73785261
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Bijan Robinson",
+     "defaultPositionId": 2,
+     "proTeamId": 1,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 56,
+       "published": false,
+       "rank": 2,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 56,
+       "published": false,
+       "rank": 2,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 38,
+       "published": false,
+       "rank": 1,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 57,
+       "published": false,
+       "rank": 8,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 2.57
+     },
+     "stats": [
+      {
+       "appliedAverage": 20.751621971764706,
+       "appliedTotal": 352.77757352,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "23": 286.5034887,
+        "24": 1372.369696,
+        "25": 8.4261856,
+        "26": 0.439726158,
+        "27": 274.0,
+        "28": 137.0,
+        "29": 68.0,
+        "30": 54.0,
+        "31": 27.0,
+        "33": 57.0,
+        "34": 28.0,
+        "35": 0.607369411,
+        "36": 0.425158588,
+        "37": 4.856471422,
+        "38": 0.165732737,
+        "39": 4.790062776,
+        "40": 80.72762919,
+        "42": 707.6529151,
+        "43": 3.378049748,
+        "44": 0.19837186,
+        "45": 0.118083411,
+        "46": 0.077167509,
+        "47": 141.0,
+        "48": 70.0,
+        "49": 35.0,
+        "50": 28.0,
+        "51": 14.0,
+        "53": 75.77653505,
+        "56": 0.992508546,
+        "57": 0.030696141,
+        "58": 98.57437859,
+        "60": 9.338681355,
+        "61": 41.62664206,
+        "62": 0.638098018,
+        "63": 0.014594796,
+        "66": 2.623196772,
+        "67": 0.69380224,
+        "68": 3.316999012,
+        "70": 1.206670515,
+        "71": 0.388529254,
+        "72": 1.59519977,
+        "73": 1.59519977,
+        "210": 17.0,
+        "211": 72.09822929,
+        "212": 37.01789008
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Christian McCaffrey",
+     "defaultPositionId": 2,
+     "proTeamId": 25,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 53,
+       "published": false,
+       "rank": 6,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 53,
+       "published": false,
+       "rank": 6,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 27,
+       "published": false,
+       "rank": 10,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 49,
+       "published": false,
+       "rank": 12,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 6.79
+     },
+     "stats": [
+      {
+       "appliedAverage": 20.186350299411767,
+       "appliedTotal": 343.16795509,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "23": 274.1848239,
+        "24": 1130.922159,
+        "25": 9.156021514,
+        "26": 0.453680695,
+        "27": 226.0,
+        "28": 113.0,
+        "29": 56.0,
+        "30": 45.0,
+        "31": 22.0,
+        "33": 54.0,
+        "34": 27.0,
+        "35": 0.578126713,
+        "36": 0.404688699,
+        "37": 3.327856932,
+        "38": 0.114,
+        "39": 4.12467088,
+        "40": 66.52483286,
+        "42": 683.9195768,
+        "43": 4.756619379,
+        "44": 0.243863855,
+        "45": 0.098701233,
+        "46": 0.064501256,
+        "47": 136.0,
+        "48": 68.0,
+        "49": 34.0,
+        "50": 27.0,
+        "51": 13.0,
+        "53": 79.14193292,
+        "56": 0.904367556,
+        "57": 0.027970131,
+        "58": 100.0876539,
+        "60": 8.641684018,
+        "61": 40.23056334,
+        "62": 0.697544549,
+        "63": 0.010920714,
+        "66": 1.926039729,
+        "67": 0.555940715,
+        "68": 2.481980444,
+        "70": 0.885978275,
+        "71": 0.3113268,
+        "72": 1.197305076,
+        "73": 1.197305076,
+        "210": 17.0,
+        "211": 63.74137174,
+        "212": 37.69422146
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "WR": {
+  "players": [
+   {
+    "player": {
+     "fullName": "Puka Nacua",
+     "defaultPositionId": 3,
+     "proTeamId": 14,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 55,
+       "published": false,
+       "rank": 4,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 55,
+       "published": false,
+       "rank": 4,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 38,
+       "published": false,
+       "rank": 2,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 53,
+       "published": false,
+       "rank": 10,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 4.7
+     },
+     "stats": [
+      {
+       "appliedAverage": 20.958868801411764,
+       "appliedTotal": 356.30076962,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "23": 15.91967204,
+        "24": 105.6797402,
+        "25": 1.181057723,
+        "26": 0.017712335,
+        "27": 21.0,
+        "28": 10.0,
+        "29": 5.0,
+        "30": 4.0,
+        "31": 2.0,
+        "33": 3.0,
+        "34": 1.0,
+        "35": 0.029448541,
+        "36": 0.020613979,
+        "37": 0.028160208,
+        "38": 0.000961,
+        "39": 6.638311389,
+        "40": 6.216455307,
+        "42": 1590.388541,
+        "43": 9.715987521,
+        "44": 0.132367711,
+        "45": 0.31528463,
+        "46": 0.206038506,
+        "47": 318.0,
+        "48": 159.0,
+        "49": 79.0,
+        "50": 63.0,
+        "51": 31.0,
+        "53": 122.8775499,
+        "56": 6.674854464,
+        "57": 0.206438798,
+        "58": 174.2667375,
+        "60": 12.94287315,
+        "61": 93.55226714,
+        "62": 0.150080047,
+        "63": 0.007668701,
+        "66": 0.199904461,
+        "67": 1.54298219,
+        "68": 1.742886652,
+        "70": 0.091956052,
+        "71": 0.864070027,
+        "72": 0.956026079,
+        "73": 0.956026079,
+        "210": 17.0,
+        "211": 7.487951538,
+        "212": 74.68783258
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Amon-Ra St. Brown",
+     "defaultPositionId": 3,
+     "proTeamId": 8,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 52,
+       "published": false,
+       "rank": 8,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 52,
+       "published": false,
+       "rank": 8,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 32,
+       "published": false,
+       "rank": 7,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 43,
+       "published": false,
+       "rank": 18,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 8.36
+     },
+     "stats": [
+      {
+       "appliedAverage": 19.056223285,
+       "appliedTotal": 323.95579585,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "23": 2.320215099,
+        "24": 13.44023379,
+        "25": 0.123786811,
+        "26": 0.002330833,
+        "27": 2.0,
+        "28": 1.0,
+        "35": 0.004260433,
+        "36": 0.002982303,
+        "37": 0.000368,
+        "38": 1.26e-05,
+        "39": 5.792667151,
+        "40": 0.790601988,
+        "42": 1425.641601,
+        "43": 10.39123509,
+        "44": 0.229416963,
+        "45": 0.244610493,
+        "46": 0.159852957,
+        "47": 285.0,
+        "48": 142.0,
+        "49": 71.0,
+        "50": 57.0,
+        "51": 28.0,
+        "53": 118.1037514,
+        "56": 5.589902226,
+        "57": 0.172883574,
+        "58": 166.632518,
+        "60": 12.07109498,
+        "61": 83.86127064,
+        "62": 0.231747796,
+        "63": 0.006499649,
+        "66": 0.028461158,
+        "67": 1.44873184,
+        "68": 1.477192998,
+        "70": 0.013092133,
+        "71": 0.81128983,
+        "72": 0.824381963,
+        "73": 0.824381963,
+        "210": 17.0,
+        "211": 2.759047306,
+        "212": 69.33277127
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Ja'Marr Chase",
+     "defaultPositionId": 3,
+     "proTeamId": 4,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 56,
+       "published": false,
+       "rank": 3,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 56,
+       "published": false,
+       "rank": 3,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 35,
+       "published": false,
+       "rank": 5,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 55,
+       "published": false,
+       "rank": 9,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 4.11
+     },
+     "stats": [
+      {
+       "appliedAverage": 19.854345623235293,
+       "appliedTotal": 337.5238756,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "23": 4.042204187,
+        "24": 20.92264407,
+        "25": 0.143288462,
+        "26": 0.009728168,
+        "27": 4.0,
+        "28": 2.0,
+        "29": 1.0,
+        "35": 0.007429352,
+        "36": 0.005200547,
+        "37": 0.000979558,
+        "38": 3.34e-05,
+        "39": 5.176048289,
+        "40": 1.230743769,
+        "42": 1508.773504,
+        "43": 10.79976544,
+        "44": 0.505289115,
+        "45": 0.267900536,
+        "46": 0.175073,
+        "47": 301.0,
+        "48": 150.0,
+        "49": 75.0,
+        "50": 60.0,
+        "51": 30.0,
+        "53": 119.7089118,
+        "56": 6.165106957,
+        "57": 0.190673411,
+        "58": 172.4148763,
+        "60": 12.60368574,
+        "61": 88.75138259,
+        "62": 0.515017283,
+        "63": 0.007459741,
+        "66": 0.055378372,
+        "67": 1.640017261,
+        "68": 1.695395633,
+        "70": 0.025474051,
+        "71": 0.918409666,
+        "72": 0.943883718,
+        "73": 0.943883718,
+        "210": 17.0,
+        "211": 3.13084813,
+        "212": 72.15814653
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "TE": {
+  "players": [
+   {
+    "player": {
+     "fullName": "Trey McBride",
+     "defaultPositionId": 4,
+     "proTeamId": 22,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 38,
+       "published": false,
+       "rank": 17,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 38,
+       "published": false,
+       "rank": 17,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 23,
+       "published": false,
+       "rank": 15,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 34,
+       "published": false,
+       "rank": 28,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 20.03
+     },
+     "stats": [
+      {
+       "appliedAverage": 14.22777336729412,
+       "appliedTotal": 241.87214724,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "42": 1023.248682,
+        "43": 5.344628279,
+        "44": 0.293999961,
+        "45": 0.098531039,
+        "46": 0.064390034,
+        "47": 204.0,
+        "48": 102.0,
+        "49": 51.0,
+        "50": 40.0,
+        "51": 20.0,
+        "53": 107.8157335,
+        "56": 2.664020295,
+        "57": 0.08239238,
+        "58": 148.9623561,
+        "60": 9.490717628,
+        "61": 60.19109897,
+        "62": 0.293999961,
+        "63": 0.003718531,
+        "67": 0.845120747,
+        "68": 0.845120747,
+        "71": 0.473267619,
+        "72": 0.473267619,
+        "73": 0.473267619,
+        "210": 17.0,
+        "212": 53.82773802
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Brock Bowers",
+     "defaultPositionId": 4,
+     "proTeamId": 13,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 32,
+       "published": false,
+       "rank": 24,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 32,
+       "published": false,
+       "rank": 24,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 21,
+       "published": false,
+       "rank": 21,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 25,
+       "published": false,
+       "rank": 42,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 23.97
+     },
+     "stats": [
+      {
+       "appliedAverage": 14.173190323411763,
+       "appliedTotal": 240.9442355,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "23": 4.154420554,
+        "24": 15.40766344,
+        "25": 0.194882437,
+        "26": 0.011026996,
+        "27": 3.0,
+        "28": 1.0,
+        "35": 0.007636076,
+        "36": 0.005345253,
+        "37": 0.000503241,
+        "38": 1.72e-05,
+        "39": 3.70873946,
+        "40": 0.906333144,
+        "42": 998.5704335,
+        "43": 6.557770825,
+        "44": 0.417653295,
+        "45": 0.131345208,
+        "46": 0.085834093,
+        "47": 199.0,
+        "48": 99.0,
+        "49": 49.0,
+        "50": 39.0,
+        "51": 19.0,
+        "53": 98.85687487,
+        "56": 2.505502364,
+        "57": 0.077489764,
+        "58": 136.0439678,
+        "60": 10.10117339,
+        "61": 58.73943727,
+        "62": 0.428680291,
+        "63": 0.002771363,
+        "66": 0.025401906,
+        "67": 0.604453255,
+        "68": 0.629855161,
+        "70": 0.011684877,
+        "71": 0.338493823,
+        "72": 0.350178699,
+        "73": 0.350178699,
+        "210": 17.0,
+        "211": 2.989913949,
+        "212": 51.60126231
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Colston Loveland",
+     "defaultPositionId": 4,
+     "proTeamId": 3,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 13,
+       "published": false,
+       "rank": 50,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 13,
+       "published": false,
+       "rank": 50,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 17,
+       "published": false,
+       "rank": 33,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 8,
+       "published": false,
+       "rank": 80,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 45.23
+     },
+     "stats": [
+      {
+       "appliedAverage": 12.112852133058823,
+       "appliedTotal": 205.91848626,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "42": 897.398152,
+        "43": 6.009041671,
+        "44": 0.399238492,
+        "45": 0.150683685,
+        "46": 0.098471788,
+        "47": 179.0,
+        "48": 89.0,
+        "49": 44.0,
+        "50": 35.0,
+        "51": 17.0,
+        "53": 80.18381317,
+        "56": 1.895246547,
+        "57": 0.058615873,
+        "58": 118.2709277,
+        "60": 11.19176198,
+        "61": 52.78812659,
+        "62": 0.399238492,
+        "63": 0.003451558,
+        "67": 0.784445058,
+        "68": 0.784445058,
+        "71": 0.439289233,
+        "72": 0.439289233,
+        "73": 0.439289233,
+        "210": 17.0,
+        "212": 44.33073717
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "K": {
+  "players": [
+   {
+    "player": {
+     "fullName": "Brandon Aubrey",
+     "defaultPositionId": 5,
+     "proTeamId": 6,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 240,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 240,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 4,
+       "published": false,
+       "rank": 580,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 251,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 85.03
+     },
+     "stats": [
+      {
+       "appliedAverage": 10.097765494117645,
+       "appliedTotal": 171.6620134,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "74": 7.02552502,
+        "75": 9.435272,
+        "76": 2.40974698,
+        "77": 9.2261031,
+        "78": 10.783168,
+        "79": 1.5570649,
+        "80": 19.2313044,
+        "81": 19.42556,
+        "82": 0.1942556,
+        "83": 35.48293252,
+        "84": 39.644,
+        "85": 4.16106748,
+        "86": 46.09713018,
+        "87": 47.03788794,
+        "88": 0.940757759,
+        "198": 7.02552502,
+        "199": 9.435272,
+        "200": 2.40974698,
+        "210": 17.0,
+        "214": 1371.492123,
+        "215": 206.0219254,
+        "216": 1577.514048
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Cameron Dicker",
+     "defaultPositionId": 5,
+     "proTeamId": 24,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 241,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 241,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 4,
+       "published": false,
+       "rank": 590,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 252,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 105.28
+     },
+     "stats": [
+      {
+       "appliedAverage": 9.523160011000002,
+       "appliedTotal": 161.89372019,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "74": 6.752704542,
+        "75": 8.9988276,
+        "76": 2.246123058,
+        "77": 8.858942177,
+        "78": 10.2843744,
+        "79": 1.425432223,
+        "80": 18.34172802,
+        "81": 18.526998,
+        "82": 0.18526998,
+        "83": 33.95337474,
+        "84": 37.8102,
+        "85": 3.856825261,
+        "86": 41.52606997,
+        "87": 42.37354078,
+        "88": 0.847470816,
+        "198": 6.752704542,
+        "199": 8.9988276,
+        "200": 2.246123058,
+        "210": 17.0,
+        "214": 1313.550284,
+        "215": 190.9931946,
+        "216": 1504.543478
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Jason Myers",
+     "defaultPositionId": 5,
+     "proTeamId": 26,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 242,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 242,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 2,
+       "published": false,
+       "rank": 659,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 253,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 116.32
+     },
+     "stats": [
+      {
+       "appliedAverage": 9.323823697411763,
+       "appliedTotal": 158.50500286,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "74": 6.43815471,
+        "75": 9.0139644,
+        "76": 2.57580969,
+        "77": 8.501376867,
+        "78": 10.3016736,
+        "79": 1.800296733,
+        "80": 18.15437917,
+        "81": 18.558162,
+        "82": 0.403782829,
+        "83": 33.09391075,
+        "84": 37.8738,
+        "85": 4.779889252,
+        "86": 42.62547358,
+        "87": 43.4953812,
+        "88": 0.869907624,
+        "198": 6.43815471,
+        "199": 9.0139644,
+        "200": 2.57580969,
+        "210": 17.0,
+        "214": 1274.853688,
+        "215": 232.2205611,
+        "216": 1507.07425
+       }
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "DST": {
+  "players": [
+   {
+    "player": {
+     "fullName": "Texans D/ST",
+     "defaultPositionId": 16,
+     "proTeamId": 34,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 223,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 223,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 4,
+       "published": false,
+       "rank": 541,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 234,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 86.22
+     },
+     "stats": [
+      {
+       "appliedAverage": 7.7114402274117655,
+       "appliedTotal": 131.09448387,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "89": 0.291929508,
+        "90": 1.319214979,
+        "91": 4.357664964,
+        "92": 3.608691299,
+        "93": 0.125897408,
+        "94": 1.612263409,
+        "95": 12.31393198,
+        "96": 10.82373189,
+        "97": 1.808717872,
+        "98": 0.26049967,
+        "99": 43.41394952,
+        "100": 86.82789904,
+        "101": 0.161152751,
+        "102": 0.243868571,
+        "103": 1.090343386,
+        "104": 0.521920022,
+        "105": 2.143182139,
+        "106": 16.65189522,
+        "109": 1030.968194,
+        "110": 343.0,
+        "111": 206.0,
+        "112": 53.72075633,
+        "113": 90.64795771,
+        "114": 1519.941309,
+        "115": 319.2398883,
+        "116": 151.0,
+        "117": 60.0,
+        "118": 31.0,
+        "119": 12.0,
+        "120": 322.2629413,
+        "121": 2.468208671,
+        "122": 2.97036147,
+        "123": 1.59156904,
+        "124": 0.365975768,
+        "125": 0.0263843,
+        "126": 18.9566436,
+        "127": 5452.772993,
+        "129": 0.783645656,
+        "130": 6.132879046,
+        "131": 4.497444634,
+        "132": 3.526405451,
+        "133": 1.584327087,
+        "134": 0.340715503,
+        "135": 0.119250426,
+        "136": 0.015332198,
+        "137": 320.7513525,
+        "210": 17.0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Broncos D/ST",
+     "defaultPositionId": 16,
+     "proTeamId": 7,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 225,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 225,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 5,
+       "published": false,
+       "rank": 510,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 236,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 95.38
+     },
+     "stats": [
+      {
+       "appliedAverage": 7.6877512250588245,
+       "appliedTotal": 130.69177083,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "89": 0.310716074,
+        "90": 1.40460691,
+        "91": 4.596895343,
+        "92": 3.745618428,
+        "93": 0.122386924,
+        "94": 1.558266457,
+        "95": 12.94125739,
+        "96": 6.821810557,
+        "97": 1.936980137,
+        "98": 0.260835781,
+        "99": 45.28474038,
+        "100": 90.56948077,
+        "101": 0.269739218,
+        "102": 0.314479004,
+        "103": 1.040935375,
+        "104": 0.517331082,
+        "105": 2.264871603,
+        "106": 10.49509316,
+        "109": 1024.980393,
+        "110": 341.0,
+        "111": 204.0,
+        "112": 36.96772048,
+        "113": 84.62428618,
+        "114": 1519.850118,
+        "115": 437.4158914,
+        "116": 151.0,
+        "117": 60.0,
+        "118": 43.0,
+        "119": 17.0,
+        "120": 317.7700776,
+        "121": 2.468703055,
+        "122": 2.851777666,
+        "123": 1.40460691,
+        "124": 0.212819229,
+        "125": 0.004256385,
+        "126": 18.6923575,
+        "127": 5448.03509,
+        "129": 0.809320972,
+        "130": 6.304184415,
+        "131": 4.557754949,
+        "132": 3.492858933,
+        "133": 1.490854422,
+        "134": 0.255575044,
+        "135": 0.085191681,
+        "136": 0.004259584,
+        "137": 320.4726523,
+        "210": 17.0
+       }
+      }
+     ]
+    }
+   },
+   {
+    "player": {
+     "fullName": "Seahawks D/ST",
+     "defaultPositionId": 16,
+     "proTeamId": 26,
+     "draftRanksByRankType": {
+      "STANDARD": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 228,
+       "rankSourceId": 0,
+       "rankType": "STANDARD",
+       "slotId": 0
+      },
+      "PPR": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 228,
+       "rankSourceId": 0,
+       "rankType": "PPR",
+       "slotId": 0
+      },
+      "ELIMINATION": {
+       "auctionValue": 4,
+       "published": false,
+       "rank": 568,
+       "rankSourceId": 0,
+       "rankType": "ELIMINATION",
+       "slotId": 0
+      },
+      "SUPERFLEX": {
+       "auctionValue": 0,
+       "published": false,
+       "rank": 239,
+       "rankSourceId": 0,
+       "rankType": "SUPERFLEX",
+       "slotId": 0
+      }
+     },
+     "ownership": {
+      "averageDraftPosition": 107.75
+     },
+     "stats": [
+      {
+       "appliedAverage": 7.1087647952941175,
+       "appliedTotal": 120.84900152,
+       "externalId": "2026",
+       "id": "102026",
+       "proTeamId": 0,
+       "scoringPeriodId": 0,
+       "seasonId": 2026,
+       "statSourceId": 1,
+       "statSplitTypeId": 0,
+       "stats": {
+        "89": 0.273150466,
+        "90": 1.233857243,
+        "91": 4.118530383,
+        "92": 3.471819001,
+        "93": 0.124479253,
+        "94": 1.600985982,
+        "95": 12.8401131,
+        "96": 7.200327387,
+        "97": 1.864734474,
+        "98": 0.25809876,
+        "99": 42.37051157,
+        "100": 84.74102314,
+        "101": 0.477453079,
+        "102": 0.482336445,
+        "103": 1.081332478,
+        "104": 0.519653504,
+        "105": 2.685254759,
+        "106": 11.07742675,
+        "109": 1067.91925,
+        "110": 355.0,
+        "111": 213.0,
+        "112": 46.7889247,
+        "113": 95.44445496,
+        "114": 1547.550989,
+        "115": 396.4638566,
+        "116": 154.0,
+        "117": 61.0,
+        "118": 39.0,
+        "119": 15.0,
+        "120": 331.0635296,
+        "121": 2.467714486,
+        "122": 3.088897788,
+        "123": 1.778456302,
+        "124": 0.519070978,
+        "125": 0.048503354,
+        "126": 19.47432527,
+        "127": 5508.233642,
+        "129": 0.706665999,
+        "130": 5.619271798,
+        "131": 4.316622427,
+        "132": 3.626984524,
+        "133": 1.864576551,
+        "134": 0.595983373,
+        "135": 0.221365253,
+        "136": 0.048530075,
+        "137": 324.0137436,
+        "210": 17.0
+       }
+      }
+     ]
+    }
+   }
+  ]
+ }
+}
