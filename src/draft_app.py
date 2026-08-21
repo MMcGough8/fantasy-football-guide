@@ -1,16 +1,39 @@
+import json
+import os
+
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()  # secrets come from .env at the repo root, never from code
 from collections import Counter
-from draft_board import build_board, NUM_TEAMS
+from draft_board import build_board
 from categories import sleepers, top_rookies, boom_ceiling, high_floor
 from grader import grade_draft
-from collections import Counter as _C
+from roster_slots import allocate_slots
+from recommend import recommend_pick
+from pick_sync import apply_picks, index_board_by_player_id, next_pick_info
+import sleeper_league
+from sleeper_league import SleeperError
+from scoring import PRESET_FALLBACK_POSITIONS, scoring_summary, unprojected_bonus_keys
+import fantasypros
+from fantasypros import FantasyProsError
+import espn_projections
+from espn_projections import EspnError
 
 st.set_page_config(page_title="Fantasy Command Center", page_icon="🏈", layout="wide")
 
 # ---- Config ----
-STARTERS = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "K": 1, "DEF": 1}
-BENCH_SPOTS = 8
-NEED_BONUS = 20.0
+DEFAULT_STARTERS = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "K": 1, "DEF": 1}
+LEAGUE_SIZES = [8, 10, 12, 14]
+REQUIRED_LEAGUE_KEYS = ("league_id", "name", "num_teams", "starters", "bench", "scoring_settings", "user_id")
+DEFAULT_BENCH_SPOTS = 8
+SEASON = "2026"
+SYNC_INTERVAL = "15s"  # how often auto-sync polls the Sleeper draft
+FP_CACHE_SECONDS = 6 * 3600
+SOURCE_SPLIT_PCT = 0.15  # flag a player when Sleeper and FantasyPros differ by this much
+LEAGUE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".sleeper_league.json"
+)
 TOP_N = 30
 SCORING_LABELS = {"PPR": "pts_ppr", "Half-PPR": "pts_half_ppr", "Standard": "pts_std"}
 
@@ -21,6 +44,11 @@ POS_COLORS = {
     "TE": "#fb923c",
     "K": "#94a3b8",
     "DEF": "#f87171",
+    "FLEX": "#e879f9",
+    "SUPER_FLEX": "#e879f9",
+    "REC_FLEX": "#e879f9",
+    "WRRB_FLEX": "#e879f9",
+    "BN": "#64748b",
 }
 
 # ---- Styling ----
@@ -73,9 +101,46 @@ def espn_photo(player_id):
     return f"https://a.espncdn.com/i/headshots/nfl/players/full/{player_id}.png"
 
 
+@st.cache_data(ttl=FP_CACHE_SECONDS, show_spinner="Loading FantasyPros consensus...")
+def load_fantasypros(season):
+    return fantasypros.fetch_all(season, os.getenv("FANTASYPROS_API_KEY", "").strip())
+
+
+@st.cache_data(ttl=FP_CACHE_SECONDS, show_spinner="Loading ESPN projections...")
+def load_espn(season):
+    return espn_projections.fetch_all(season)
+
+
 @st.cache_data(show_spinner="Loading projections from Sleeper...")
-def load_board(scoring, num_teams):
-    return build_board(scoring, num_teams)
+def load_board(scoring, num_teams, scoring_items, starters_items, use_fantasypros):
+    """Returns (board, projection_note). Dicts arrive as sorted tuples so the cache can hash them."""
+    scoring_settings = dict(scoring_items) if scoring_items else None
+    extra, live_ranks, problems = {}, None, []
+    if use_fantasypros:
+        try:
+            extra["fp"] = load_fantasypros(SEASON)
+        except FantasyProsError as e:
+            problems.append(f"FantasyPros unavailable: {e}")
+    try:
+        espn = load_espn(SEASON)
+        extra["espn"] = espn["projections"]
+        live_ranks = espn["ranks"]
+    except EspnError as e:
+        problems.append(f"ESPN unavailable: {e}")
+
+    names = ["Sleeper (Rotowire)"] + [
+        label for key, label in (("fp", "FantasyPros consensus"), ("espn", "ESPN")) if key in extra
+    ]
+    how = {1: "", 2: ", averaged stat by stat", 3: ", per-stat median (one outlier ignored)"}[len(names)]
+    note = " + ".join(names) + how
+    if live_ranks:
+        note += ". ESPN ranks are live"
+    if problems:
+        note += ". " + "; ".join(problems)
+    board = build_board(
+        scoring, num_teams, scoring_settings, dict(starters_items), extra or None, live_ranks
+    )
+    return board, note
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -98,15 +163,70 @@ def player_key(p):
     return f"{p['name']}|{p['team']}|{p['position']}"
 
 
+SOURCE_LABELS = {"sleeper": "Sleeper", "fp": "FP", "espn": "ESPN"}
+
+
+def sources_disagree(p):
+    values = list((p.get("points_by_source") or {}).values())
+    if len(values) < 2 or max(values) <= 0:
+        return False
+    if p["position"] in PRESET_FALLBACK_POSITIONS:
+        return False  # K/DEF use each site's own preset scale, not comparable
+    return (max(values) - min(values)) / max(values) >= SOURCE_SPLIT_PCT
+
+
+def source_txt(p):
+    by_source = p.get("points_by_source") or {}
+    if len(by_source) < 2:
+        return ""
+    return " (" + " · ".join(f"{SOURCE_LABELS.get(s, s)} {v}" for s, v in by_source.items()) + ")"
+
+
 def draft_player(p, mine):
-    st.session_state.drafted.add(player_key(p))
+    st.session_state.drafted = st.session_state.drafted | {player_key(p)}
     if mine:
-        st.session_state.my_roster.append(p)
+        st.session_state.my_roster = st.session_state.my_roster + [p]
 
 
 def reset_draft():
     st.session_state.drafted = set()
     st.session_state.my_roster = []
+    st.session_state.synced_taken = set()
+    st.session_state.synced_mine = []
+    st.session_state.draft_info = None
+
+
+def save_league(cfg):
+    try:
+        with open(LEAGUE_FILE, "w") as f:
+            json.dump(cfg, f)
+    except OSError as e:
+        st.warning(f"Connected, but couldn't save the league for next time: {e}")
+
+
+def load_saved_league():
+    if not os.path.exists(LEAGUE_FILE):
+        return None
+    try:
+        with open(LEAGUE_FILE) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(cfg, dict) or any(k not in cfg for k in REQUIRED_LEAGUE_KEYS):
+        return None  # written by an older version; reconnect instead of crashing
+    return cfg
+
+
+def forget_league():
+    st.session_state.league = None
+    st.session_state.draft_info = None
+    st.session_state.synced_taken = set()
+    st.session_state.synced_mine = []
+    st.session_state.pop("my_roster_id", None)
+    try:
+        os.remove(LEAGUE_FILE)
+    except FileNotFoundError:
+        pass
 
 
 # ---- Session defaults ----
@@ -114,30 +234,99 @@ if "drafted" not in st.session_state:
     st.session_state.drafted = set()
 if "my_roster" not in st.session_state:
     st.session_state.my_roster = []
-if "scoring" not in st.session_state:
-    st.session_state.scoring = "PPR"
-if "league_size" not in st.session_state:
-    st.session_state.league_size = 10
+if "scoring_pref" not in st.session_state:
+    st.session_state.scoring_pref = "PPR"
+if "league_size_pref" not in st.session_state:
+    st.session_state.league_size_pref = 10
+if "synced_taken" not in st.session_state:
+    st.session_state.synced_taken = set()
+if "synced_mine" not in st.session_state:
+    st.session_state.synced_mine = []
 if "pos_filter" not in st.session_state:
     st.session_state.pos_filter = "All"
+if "league" not in st.session_state:
+    st.session_state.league = load_saved_league()
+if "draft_info" not in st.session_state:
+    st.session_state.draft_info = None
 
 # ---- Load board (needed by player search in both modes) ----
-board = load_board(
-    SCORING_LABELS[st.session_state.scoring], st.session_state.league_size
-)
-board = list({player_key(x): x for x in board}.values())  # de-duplicate
+# ---- League config: a connected Sleeper league overrides the manual radios ----
+league = st.session_state.league
+if league:
+    starters = league["starters"]
+    bench_spots = league["bench"]
+    num_teams = league["num_teams"]
+    scoring_items = tuple(sorted(league["scoring_settings"].items()))
+    scoring_label = f"{league['name']} league scoring"
+else:
+    starters = DEFAULT_STARTERS
+    bench_spots = DEFAULT_BENCH_SPOTS
+    num_teams = st.session_state.league_size_pref
+    scoring_items = None
+    scoring_label = st.session_state.scoring_pref
 
-my_roster = st.session_state.my_roster
-available = [p for p in board if player_key(p) not in st.session_state.drafted]
+try:
+    board, projection_note = load_board(
+        SCORING_LABELS[st.session_state.scoring_pref],
+        num_teams,
+        scoring_items,
+        tuple(sorted(starters.items())),
+        bool(os.getenv("FANTASYPROS_API_KEY", "").strip()),
+    )
+except Exception as e:
+    st.error(f"Couldn't load projections from Sleeper: {e}")
+    c1, c2 = st.columns(2)
+    if c1.button("Retry", type="primary"):
+        st.rerun()
+    if league and c2.button("Disconnect league"):
+        forget_league()
+        st.rerun()
+    st.stop()
+board = list({player_key(x): x for x in board}.values())  # de-duplicate
+board_by_id = index_board_by_player_id(board)
+
+# Synced picks are the truth from Sleeper; manual Mine/Taken marks layer on top.
+synced_taken = st.session_state.synced_taken
+synced_mine_keys = {player_key(p) for p in st.session_state.synced_mine}
+drafted_keys = st.session_state.drafted | synced_taken
+my_roster = st.session_state.synced_mine + [
+    p for p in st.session_state.my_roster
+    if player_key(p) not in synced_taken or player_key(p) in synced_mine_keys
+]
+available = [p for p in board if player_key(p) not in drafted_keys]
 available.sort(key=lambda p: p["vor"], reverse=True)
 
-counts = Counter(p["position"] for p in my_roster)
-needs = {pos: max(0, STARTERS[pos] - counts.get(pos, 0)) for pos in STARTERS}
+allocation = allocate_slots(my_roster, starters)
+needs = allocation.needs
 
 
-def adjusted_score(p):
-    bonus = NEED_BONUS if needs.get(p["position"], 0) > 0 else 0
-    return p["vor"] + bonus
+total_picks = sum(starters.values()) + bench_spots
+
+
+def sync_picks_from_sleeper():
+    """Mark every pick from the live Sleeper draft. Returns True if anything changed."""
+    draft = sleeper_league.get_draft(league["draft_id"])
+    picks = sleeper_league.get_draft_picks(league["draft_id"])
+    if "my_roster_id" not in st.session_state:
+        rosters = sleeper_league.get_rosters(league["league_id"])
+        st.session_state.my_roster_id = sleeper_league.my_roster_id(rosters, league["user_id"])
+    result = apply_picks(picks, board_by_id, league["user_id"], st.session_state.my_roster_id)
+
+    new_taken = {player_key(p) for p in result.taken}
+    new_mine_keys = [player_key(p) for p in result.mine]
+    changed = (
+        new_taken != st.session_state.synced_taken
+        or new_mine_keys != [player_key(p) for p in st.session_state.synced_mine]
+    )
+    st.session_state.synced_taken = new_taken
+    st.session_state.synced_mine = result.mine
+    st.session_state.draft_info = {
+        "status": draft.get("status"),
+        "picks": len(picks),
+        "next": next_pick_info(draft, len(picks), league["user_id"]),
+        "unmatched": len(result.unmatched),
+    }
+    return changed
 
 
 # ==================== SIDEBAR ====================
@@ -150,6 +339,54 @@ with st.sidebar:
         label_visibility="collapsed",
         key="app_mode",
     )
+    st.divider()
+
+    # ---- Sleeper League ----
+    st.markdown("<div class='sec-head'>Sleeper League</div>", unsafe_allow_html=True)
+    if league:
+        slot_text = " / ".join(
+            f"{n}{slot}" if n > 1 else slot for slot, n in league["starters"].items()
+        )
+        st.markdown(
+            f"<span style='color:#ffffff'>{league['name']}</span><br>"
+            f"<span class='rank-num'>{league['num_teams']} teams · {slot_text} · "
+            f"{league['bench']} BN · league scoring</span>",
+            unsafe_allow_html=True,
+        )
+        if league.get("is_dynasty"):
+            st.caption("Dynasty league: this board only values the 2026 season.")
+        st.button("Disconnect", on_click=forget_league, use_container_width=True)
+    else:
+        username = st.text_input(
+            "Sleeper username",
+            placeholder="Sleeper username",
+            key="sleeper_username",
+            label_visibility="collapsed",
+        )
+        if st.button("Find my leagues", use_container_width=True) and username:
+            try:
+                user = sleeper_league.get_user(username.strip())
+                found = sleeper_league.get_leagues(user["user_id"], SEASON)
+                st.session_state.league_options = {
+                    f"{lg['name']} ({lg['total_rosters']} teams)": (lg, user["user_id"])
+                    for lg in found
+                }
+                if not found:
+                    st.warning(f"No {SEASON} leagues found for {username}")
+            except SleeperError as e:
+                st.error(str(e))
+        options = st.session_state.get("league_options") or {}
+        if options:
+            choice = st.selectbox(
+                "League", options=list(options.keys()), label_visibility="collapsed"
+            )
+            if st.button("Connect", type="primary", use_container_width=True):
+                picked_league, user_id = options[choice]
+                cfg = sleeper_league.league_config(picked_league, user_id)
+                st.session_state.league = cfg
+                st.session_state.league_options = None
+                save_league(cfg)
+                st.rerun()
     st.divider()
 
     @st.cache_data(ttl=1800, show_spinner=False)
@@ -187,11 +424,14 @@ with st.sidebar:
     if st.button("Get news", type="primary", use_container_width=True):
         picked = news_options[choice]
         with st.spinner(f"Searching outlets for {picked['name']}..."):
-            result = cached_news(picked["name"], picked["team"], picked["position"])
-            st.session_state.news_summary = result["summary"]
-            st.session_state.news_sources = result.get("sources", {})
-            st.session_state.news_player = picked["name"]
-            st.session_state.news_photo = sleeper_photo(picked.get("player_id"))
+            try:
+                result = cached_news(picked["name"], picked["team"], picked["position"])
+                st.session_state.news_summary = result["summary"]
+                st.session_state.news_sources = result.get("sources", {})
+                st.session_state.news_player = picked["name"]
+                st.session_state.news_photo = sleeper_photo(picked.get("player_id"))
+            except Exception as e:
+                st.error(f"News unavailable (is ANTHROPIC_API_KEY set in .env?): {e}")
 
     # News result — directly under Player Search
     if st.session_state.get("news_summary"):
@@ -229,18 +469,23 @@ with st.sidebar:
     if st.button("Ask", use_container_width=True) and user_q:
         from news import ask_question
 
-        picks_made = len(st.session_state.drafted)
-        size = st.session_state.get("league_size", 10)
+        picks_made = (st.session_state.draft_info or {}).get("picks") or len(drafted_keys)
         with st.spinner("Thinking..."):
-            st.session_state.answer = ask_question(
-                user_q,
-                league_size=size,
-                scoring=st.session_state.get("scoring", "PPR"),
-                my_roster=st.session_state.my_roster,
-                taken=st.session_state.drafted,
-                round_num=picks_made // size + 1,
-                pick_in_round=picks_made % size + 1,
-            )
+            try:
+                st.session_state.answer = ask_question(
+                    user_q,
+                    league_size=num_teams,
+                    scoring=scoring_label,
+                    my_roster=my_roster,
+                    taken=picks_made,
+                    round_num=picks_made // num_teams + 1,
+                    pick_in_round=picks_made % num_teams + 1,
+                    available=available,
+                    needs=needs,
+                    scoring_notes=scoring_summary(league["scoring_settings"]) if league else None,
+                )
+            except Exception as e:
+                st.error(f"Analyst unavailable (is ANTHROPIC_API_KEY set in .env?): {e}")
 
     # Analyst answer — directly under Ask the Analyst
     if st.session_state.get("answer"):
@@ -254,10 +499,17 @@ with st.sidebar:
         st.divider()
         st.markdown("<div class='sec-head'>My Roster</div>", unsafe_allow_html=True)
         if my_roster:
-            for p in my_roster:
+            for slot, slot_players in allocation.slots.items():
+                for p in slot_players:
+                    st.markdown(
+                        f"{badge(slot)} &nbsp; <span style='color:#ffffff;'>{p['name']}</span> "
+                        f"<span class='rank-num'>({p['team']})</span>",
+                        unsafe_allow_html=True,
+                    )
+            for p in allocation.bench:
                 st.markdown(
-                    f"{badge(p['position'])} &nbsp; <span style='color:#ffffff;'>{p['name']}</span> "
-                    f"<span class='rank-num'>({p['team']})</span>",
+                    f"{badge('BN')} &nbsp; <span style='color:#ffffff;'>{p['name']}</span> "
+                    f"<span class='rank-num'>({p['position']} · {p['team']})</span>",
                     unsafe_allow_html=True,
                 )
         else:
@@ -266,7 +518,7 @@ with st.sidebar:
             )
 
         # Bye week collision check
-        bye_counts = _C(p.get("bye") for p in my_roster if p.get("bye"))
+        bye_counts = Counter(p.get("bye") for p in my_roster if p.get("bye"))
         heavy_byes = {wk: n for wk, n in bye_counts.items() if n >= 3}
         if heavy_byes:
             st.markdown(
@@ -292,12 +544,11 @@ with st.sidebar:
         # ---- Positional Strengths ----
         # A position is a "strength" if you have surplus depth AND good value there
         strengths = []
-        for pos in STARTERS:
+        for pos in Counter(p["position"] for p in allocation.bench):
             pos_players = [p for p in my_roster if p["position"] == pos]
-            surplus = len(pos_players) - STARTERS[pos]  # extra beyond starters
             pos_vor = sum(p.get("vor", 0) for p in pos_players)
-            # Strong if you have at least one extra AND meaningful total value
-            if surplus >= 1 and pos_vor > 100:
+            # Strong if you have depth beyond your starters AND meaningful total value
+            if pos_vor > 100:
                 strengths.append((pos, len(pos_players), round(pos_vor)))
 
         if strengths:
@@ -309,12 +560,9 @@ with st.sidebar:
                     unsafe_allow_html=True,
                 )
 
-        starters_needed = sum(needs.values())
-        total_starters = sum(STARTERS.values())
-        bench_filled = max(0, len(my_roster) - (total_starters - starters_needed))
         st.markdown(
             f"<div class='sec-head'>Bench</div>"
-            f"<span class='mono'>{bench_filled} / {BENCH_SPOTS} filled</span>",
+            f"<span class='mono'>{len(allocation.bench)} / {bench_spots} filled</span>",
             unsafe_allow_html=True,
         )
 
@@ -337,40 +585,111 @@ st.markdown(
 
 # ==================== DRAFT MODE ====================
 if mode == "Draft":
-    # ---- Scoring + league size ----
-    st.radio(
-        "League scoring",
-        options=list(SCORING_LABELS.keys()),
-        horizontal=True,
-        key="scoring",
-    )
-    st.radio("League size", options=[8, 10, 12, 14], horizontal=True, key="league_size")
+    # ---- Scoring + league size (manual unless a Sleeper league is connected) ----
+    if league:
+        gaps = unprojected_bonus_keys(league["scoring_settings"])
+        gap_note = (
+            " Long-TD bonuses (40+/50+ yds) are not projected and are left out."
+            if gaps
+            else ""
+        )
+        st.markdown(
+            f"<span class='rank-num'>Board built for <b>{league['name']}</b>: "
+            f"{num_teams} teams, your league's scoring (yardage-game bonuses estimated "
+            f"from season totals), FLEX-aware replacement levels.{gap_note}<br>"
+            f"Projections: {projection_note}.</span>",
+            unsafe_allow_html=True,
+        )
+    else:
+        scoring_options = list(SCORING_LABELS.keys())
+        st.radio(
+            "League scoring",
+            options=scoring_options,
+            index=scoring_options.index(st.session_state.scoring_pref),
+            horizontal=True,
+            key="scoring_widget",
+            on_change=lambda: st.session_state.update(
+                scoring_pref=st.session_state.scoring_widget
+            ),
+        )
+        st.radio(
+            "League size",
+            options=LEAGUE_SIZES,
+            index=LEAGUE_SIZES.index(st.session_state.league_size_pref),
+            horizontal=True,
+            key="league_size_widget",
+            on_change=lambda: st.session_state.update(
+                league_size_pref=st.session_state.league_size_widget
+            ),
+        )
+        st.markdown(
+            f"<span class='rank-num'>Projections: {projection_note}.</span>",
+            unsafe_allow_html=True,
+        )
 
     # ---- Draft status cards ----
-    picks_made = len(st.session_state.drafted)
-    round_num = picks_made // st.session_state.league_size + 1
-    pick_in_round = picks_made % st.session_state.league_size + 1
+    picks_made = (st.session_state.draft_info or {}).get("picks") or len(drafted_keys)
+    round_num = picks_made // num_teams + 1
+    pick_in_round = picks_made % num_teams + 1
 
     def stat_card(label, value):
         return f"<div class='stat-card'><div class='stat-val'>{value}</div><div class='stat-lbl'>{label}</div></div>"
 
-    m1, m2, m3 = st.columns(3)
+    next_pick = (st.session_state.draft_info or {}).get("next")
+    if next_pick is None:
+        your_pick = "—"
+    elif next_pick["picks_until_mine"] == 0:
+        your_pick = "NOW"
+    else:
+        your_pick = next_pick["picks_until_mine"]
+
+    m1, m2, m3, m4 = st.columns(4)
     m1.markdown(
         stat_card("Round · Pick", f"{round_num} · {pick_in_round}"),
         unsafe_allow_html=True,
     )
     m2.markdown(stat_card("Overall Picks", picks_made), unsafe_allow_html=True)
     m3.markdown(stat_card("Your Roster", len(my_roster)), unsafe_allow_html=True)
+    m4.markdown(stat_card("Your Pick In", your_pick), unsafe_allow_html=True)
+
+    # ---- Live sync from the Sleeper draft room ----
+    if league and league.get("draft_id"):
+        sc1, sc2, sc3 = st.columns([1.2, 1.2, 4], vertical_alignment="center")
+        if sc1.button("Sync picks", use_container_width=True):
+            try:
+                sync_picks_from_sleeper()
+                st.rerun()
+            except SleeperError as e:
+                st.error(str(e))
+        auto_sync = sc2.toggle("Auto-sync", key="auto_sync")
+        info = st.session_state.draft_info
+        if info:
+            unmatched = f" · {info['unmatched']} unmatched" if info["unmatched"] else ""
+            sc3.markdown(
+                f"<span class='rank-num'>Sleeper draft {info['status']} · "
+                f"{info['picks']} picks synced{unmatched}</span>",
+                unsafe_allow_html=True,
+            )
+        else:
+            sc3.markdown(
+                f"<span class='rank-num'>Not synced yet. Auto-sync polls every {SYNC_INTERVAL}.</span>",
+                unsafe_allow_html=True,
+            )
+        if auto_sync:
+
+            @st.fragment(run_every=SYNC_INTERVAL)
+            def auto_sync_fragment():
+                try:
+                    if sync_picks_from_sleeper():
+                        st.rerun(scope="app")
+                except SleeperError as e:
+                    st.warning(str(e))
+
+            auto_sync_fragment()
 
     # ---- Recommendation ----
-    if available:
-        pick = max(available, key=adjusted_score)
-        fills = needs.get(pick["position"], 0) > 0
-        reason = (
-            f"fills a need at {pick['position']}"
-            if fills
-            else "best value on the board"
-        )
+    pick, reason = recommend_pick(available, needs, len(my_roster), total_picks)
+    if pick:
         photo = sleeper_photo(pick.get("player_id"))
         rc1, rc2 = st.columns([1, 6], vertical_alignment="center")
         if photo:
@@ -378,7 +697,7 @@ if mode == "Draft":
         rc2.markdown(
             f"<div class='rec-panel'><div class='rec-label'>Recommended Pick</div>"
             f"<div class='rec-name'>{pick['name']} &nbsp; {badge(pick['position'], pick.get('tier', ''))}</div>"
-            f"<div class='rec-meta'>{reason} · PROJ {pick['points']} · VOR {pick['vor']}</div></div>",
+            f"<div class='rec-meta'>{reason} · PROJ {pick['points']}{source_txt(pick)} · VOR {pick['vor']}</div></div>",
             unsafe_allow_html=True,
         )
         # ---- Quick Entry (fast pick marking for live drafts) ----
@@ -577,6 +896,11 @@ if mode == "Draft":
                 f" <span style='color:#fbbf24;font-size:0.7rem'>"
                 f"⚡ SPLIT ({p.get('rank_spread')})</span>"
             )
+        if sources_disagree(p):
+            split += (
+                f" <span style='color:#e879f9;font-size:0.7rem'>📊"
+                f"{source_txt(p).replace(' (', ' ').rstrip(')')}</span>"
+            )
         c[3].markdown(
             f"<span class='mono'>{p['points']} / {p['vor']}"
             f"<span class='rank-num'>{bye_txt}{ranks_txt}</span></span>{split}",
@@ -646,7 +970,7 @@ if mode == "Draft":
 
     # ---- Draft Grade ----
     st.markdown("<div class='sec-head'>Draft Grade</div>", unsafe_allow_html=True)
-    grade = grade_draft(my_roster, STARTERS, BENCH_SPOTS)
+    grade = grade_draft(my_roster, starters)
     if grade is None:
         st.markdown(
             "<span class='rank-num'>Draft some players (mark them \"Mine\") to see your grade.</span>",
