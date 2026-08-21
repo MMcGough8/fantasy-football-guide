@@ -823,37 +823,45 @@ if mode == "Draft":
         )
         if st.session_state.pop("sync_error", None):
             st.error(st.session_state.get("sync_error_text", "Sync failed"))
-        info = st.session_state.draft_info
-        if info:
+
+        def render_heartbeat():
+            info = st.session_state.draft_info
+            if not info:
+                st.markdown(
+                    f"<span class='rank-num'>Not synced yet. Auto-sync polls every {SYNC_INTERVAL}.</span>",
+                    unsafe_allow_html=True,
+                )
+                return
             age = time.time() - st.session_state.get("last_sync_at", 0)
             stale = age > SYNC_STALE_SECONDS
             color = "#fb923c" if stale else "#9aa4b2"
             unmatched = f" · {info['unmatched']} unmatched" if info["unmatched"] else ""
-            sc3.markdown(
+            st.markdown(
                 f"<span class='rank-num' style='color:{color}'>Sleeper draft {info['status']} · "
                 f"{info['picks']} picks{unmatched} · synced {int(age)}s ago"
                 f"{' ⚠️ stale' if stale else ''}</span>",
                 unsafe_allow_html=True,
             )
-        else:
-            sc3.markdown(
-                f"<span class='rank-num'>Not synced yet. Auto-sync polls every {SYNC_INTERVAL}.</span>",
-                unsafe_allow_html=True,
-            )
+
         if auto_sync:
 
             @st.fragment(run_every=SYNC_INTERVAL)
             def auto_sync_fragment():
-                # The fragment also runs inline on every full rerun; skip if a sync just happened
-                if time.time() - st.session_state.get("last_sync_at", 0) < SYNC_MIN_GAP_SECONDS:
-                    return
-                try:
-                    if sync_picks_from_sleeper():
-                        st.rerun(scope="app")
-                except Exception as e:
-                    st.warning(f"Sync failed: {e}")
+                # Runs every SYNC_INTERVAL and inline on every full rerun. The heartbeat
+                # lives in here so it redraws on each poll, not just on full reruns.
+                if time.time() - st.session_state.get("last_sync_at", 0) >= SYNC_MIN_GAP_SECONDS:
+                    try:
+                        if sync_picks_from_sleeper():
+                            st.rerun(scope="app")
+                    except Exception as e:
+                        st.warning(f"Sync failed: {e}")
+                render_heartbeat()
 
-            auto_sync_fragment()
+            with sc3:
+                auto_sync_fragment()
+        else:
+            with sc3:
+                render_heartbeat()
 
     # ---- Recommendation ----
     pick, reason = recommend_pick(
