@@ -22,12 +22,31 @@ def test_flex_counts_as_filled_by_third_rb():
 
 def test_full_high_value_roster_is_an_a():
     roster = [
-        _p("QB", 20), _p("RB", 40), _p("RB", 30), _p("WR", 40), _p("WR", 30),
-        _p("TE", 15), _p("WR", 20), _p("K", 5), _p("DEF", 5),
+        _p("QB", 40), _p("RB", 60), _p("RB", 40), _p("WR", 50), _p("WR", 30),
+        _p("TE", 25), _p("WR", 20), _p("K", 5), _p("DEF", 5),
     ]
     grade = grade_draft(roster, STARTERS)
     assert grade["letter"] == "A"
     assert grade["missing"] == []
+
+
+def test_complete_roster_with_no_value_is_a_d_not_an_a():
+    roster = [_p(pos, 0) for pos in ("QB", "RB", "RB", "WR", "WR", "TE", "WR", "K", "DEF")]
+    grade = grade_draft(roster, STARTERS)
+    assert grade["letter"] == "D"
+    assert grade["score"] == 60
+
+
+def test_value_component_discriminates_between_average_and_elite():
+    average = [_p(pos, 11) for pos in ("QB", "RB", "RB", "WR", "WR", "TE", "WR", "K", "DEF")]
+    elite = [_p(pos, 25) for pos in ("QB", "RB", "RB", "WR", "WR", "TE", "WR", "K", "DEF")]
+    assert grade_draft(average, STARTERS)["score"] < grade_draft(elite, STARTERS)["score"]
+    assert grade_draft(average, STARTERS)["letter"] == "B"
+
+
+def test_negative_value_roster_never_scores_below_zero():
+    roster = [_p("RB", -150)]
+    assert grade_draft(roster, STARTERS)["score"] >= 0
 
 
 def test_one_great_pick_is_not_an_a_because_roster_is_incomplete():

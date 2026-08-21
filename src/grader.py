@@ -3,7 +3,9 @@ from roster_slots import allocate_slots
 VALUE_WEIGHT = 40
 COMPLETENESS_WEIGHT = 35
 BALANCE_WEIGHT = 25
-FULL_MARKS_AVG_VOR = 3.0  # average VOR per pick that earns the full value score
+# Average VOR per pick that earns the full value score. Simulated 14-man rosters
+# drafted off ADP average about 11; strong ones land in the 20s.
+FULL_MARKS_AVG_VOR = 20.0
 
 LETTER_CUTOFFS = [(90, "A"), (80, "B"), (70, "C"), (60, "D")]
 
@@ -27,7 +29,7 @@ def grade_draft(my_roster, starters):
     completeness = allocation.filled / allocation.total if allocation.total else 1.0
     balance = 1.0 - (len(allocation.missing) / len(starters)) if starters else 1.0
 
-    value_score = min(avg_vor / FULL_MARKS_AVG_VOR, 1.0) * VALUE_WEIGHT
+    value_score = max(0.0, min(avg_vor / FULL_MARKS_AVG_VOR, 1.0)) * VALUE_WEIGHT
     total_score = value_score + completeness * COMPLETENESS_WEIGHT + balance * BALANCE_WEIGHT
 
     return {
