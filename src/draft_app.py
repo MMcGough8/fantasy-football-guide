@@ -25,6 +25,7 @@ from pick_sync import apply_picks, index_board_by_player_id, next_pick_info
 from espn_ranks import match_key
 import sleeper_league
 from sleeper_league import SleeperError
+from draft_state import load_state, save_state
 from scoring import PRESET_FALLBACK_POSITIONS, scoring_summary, unprojected_bonus_keys
 import fantasypros
 from fantasypros import FantasyProsError
@@ -47,6 +48,9 @@ FEED_CACHE_SECONDS = 1800  # projections refresh twice an hour; a rebuild takes 
 SYNC_STALE_SECONDS = 45  # heartbeat turns orange when the last sync is older than this
 SYNC_MIN_GAP_SECONDS = 5  # a rerun right after a sync does not sync again
 SOURCE_SPLIT_PCT = 0.15  # flag a player when Sleeper and FantasyPros differ by this much
+STATE_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".draft_state.json"
+)
 LEAGUE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".sleeper_league.json"
 )
@@ -275,11 +279,27 @@ def source_txt(p):
     return " (" + " · ".join(f"{SOURCE_LABELS.get(s, s)} {v}" for s, v in by_source.items()) + ")"
 
 
+def persist_marks():
+    """Manual marks survive a refresh; keyed to the draft so a new draft starts clean."""
+    league = st.session_state.get("league") or {}
+    draft_id = league.get("draft_id") or "manual"
+    try:
+        save_state(
+            STATE_FILE,
+            draft_id,
+            drafted=st.session_state.drafted,
+            mine=[player_key(p) for p in st.session_state.my_roster],
+        )
+    except OSError:
+        pass  # losing persistence is not worth interrupting a live draft
+
+
 def draft_player(p, mine):
     st.session_state.drafted = st.session_state.drafted | {player_key(p)}
     if mine:
         st.session_state.my_roster = st.session_state.my_roster + [p]
     st.session_state.last_mark = {"key": player_key(p), "name": p["name"], "mine": mine}
+    persist_marks()
 
 
 def undo_last_mark():
@@ -291,6 +311,7 @@ def undo_last_mark():
         p for p in st.session_state.my_roster if player_key(p) != mark["key"]
     ]
     st.session_state.quick_msg = f"↩ Undid: {mark['name']}"
+    persist_marks()
 
 
 def reset_draft():
@@ -300,6 +321,7 @@ def reset_draft():
     st.session_state.synced_taken = set()
     st.session_state.synced_mine = []
     st.session_state.draft_info = None
+    persist_marks()
 
 
 def save_league(cfg):
@@ -406,6 +428,14 @@ except Exception as e:
     st.stop()
 board = list({player_key(x): x for x in board}.values())  # de-duplicate
 board_by_id = index_board_by_player_id(board)
+
+if not st.session_state.get("marks_restored"):
+    st.session_state.marks_restored = True
+    saved = load_state(STATE_FILE, (league or {}).get("draft_id") or "manual")
+    if saved:
+        by_key = {player_key(p): p for p in board}
+        st.session_state.drafted = saved["drafted"]
+        st.session_state.my_roster = [by_key[k] for k in saved["mine"] if k in by_key]
 
 sleeper_stamp = max(((p.get("sleeper_updated_at") or 0) for p in board), default=0)
 hours_old = (time.time() - sleeper_stamp / 1000) / 3600 if sleeper_stamp else None
