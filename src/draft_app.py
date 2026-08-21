@@ -75,13 +75,16 @@ st.markdown(
 [data-baseweb="select"] *, [role="listbox"] *, .stTextInput input { color: #1a1a1a !important; }
 header[data-testid="stHeader"] { background: transparent; }
 html, body, [class*="css"] { font-family: 'Chakra Petch', sans-serif; }
-.cc-title { font-weight:700; font-size:2.1rem; letter-spacing:2px; text-transform:uppercase; color:#e6edf3; margin-bottom:0; }
+.cc-title { font-weight:700; font-size:1.5rem; letter-spacing:2px; text-transform:uppercase; color:#e6edf3; margin-bottom:0; }
 .cc-title .accent { color:#00e0a4; }
 .cc-sub { color:#7d8590; letter-spacing:3px; font-size:0.72rem; text-transform:uppercase; }
 .stat-card { background:linear-gradient(180deg,#121826,#0d1420); border:1px solid #1f2a3a; border-radius:10px; padding:12px 16px; }
 .stat-val { font-family:'JetBrains Mono',monospace; font-size:1.5rem; color:#00e0a4; font-weight:600; }
 .stat-lbl { color:#7d8590; font-size:0.68rem; letter-spacing:2px; text-transform:uppercase; }
-.rec-panel { background:linear-gradient(90deg, rgba(0,224,164,0.12), rgba(0,224,164,0.02)); border:1px solid rgba(0,224,164,0.35); border-left:4px solid #00e0a4; border-radius:12px; padding:18px 22px; margin:14px 0 22px; box-shadow:0 0 40px rgba(0,224,164,0.08); }
+.rec-panel { padding:4px 0 2px; }
+[data-testid="stVerticalBlockBorderWrapper"] { border:1px solid rgba(0,224,164,0.35) !important; border-left:4px solid #00e0a4 !important; border-radius:12px !important; background:linear-gradient(90deg, rgba(0,224,164,0.10), rgba(0,224,164,0.01)); }
+.status-line { color:#9aa4b2; font-family:'JetBrains Mono',monospace; font-size:0.85rem; }
+.status-line b { color:#e6edf3; font-weight:600; }
 .rec-label { color:#00e0a4; letter-spacing:3px; font-size:0.72rem; text-transform:uppercase; margin-bottom:4px; }
 .rec-name { font-size:1.5rem; font-weight:700; color:#f0f6fc; }
 .rec-meta { color:#9aa4b2; font-size:0.9rem; margin-top:4px; font-family:'JetBrains Mono',monospace; }
@@ -389,6 +392,19 @@ except Exception as e:
 board = list({player_key(x): x for x in board}.values())  # de-duplicate
 board_by_id = index_board_by_player_id(board)
 
+sleeper_stamp = max(((p.get("sleeper_updated_at") or 0) for p in board), default=0)
+hours_old = (time.time() - sleeper_stamp / 1000) / 3600 if sleeper_stamp else None
+age_txt = f" Sleeper projections updated {hours_old:.0f}h ago." if hours_old is not None else ""
+gap_note = (
+    " Long-TD bonuses (40+/50+ yds) are not projected and are left out."
+    if league and unprojected_bonus_keys(league["scoring_settings"])
+    else ""
+)
+board_details_html = (
+    f"<span class='rank-num'>Your league's scoring (yardage-game bonuses estimated from season "
+    f"totals), FLEX-aware replacement levels.{gap_note}<br>Projections: {projection_note}.{age_txt}</span>"
+)
+
 # Synced picks are the truth from Sleeper; manual Mine/Taken marks layer on top.
 synced_taken = st.session_state.synced_taken
 drafted_keys = st.session_state.drafted | synced_taken
@@ -490,6 +506,11 @@ with st.sidebar:
         )
         if league.get("is_dynasty"):
             st.caption("Dynasty league: this board only values the 2026 season.")
+        with st.expander("Board details", expanded=False):
+            st.markdown(board_details_html, unsafe_allow_html=True)
+            if st.button("Refresh projections", help="Clear the cached feeds and rebuild the board (about 4s)"):
+                refresh_projections()
+                st.rerun()
         with st.popover("Disconnect", use_container_width=True):
             st.caption("Forget this league and its saved connection?")
             st.button("Yes, disconnect", on_click=forget_league, type="primary")
@@ -711,11 +732,13 @@ with st.sidebar:
                 unsafe_allow_html=True,
             )
 # ==================== HEADER ====================
-subtitle = (
-    "Value-based rankings · live board"
-    if mode == "Draft"
-    else "In-season tools · live from your league"
-)
+if mode != "Draft":
+    subtitle = "In-season tools · live from your league"
+elif league:
+    feeds = projection_note.split(",")[0].split(".")[0]
+    subtitle = f"{league['name']} · {num_teams} teams · league scoring · {feeds}"
+else:
+    subtitle = f"Manual board · {num_teams} teams · {scoring_label} · {projection_note.split(',')[0].split('.')[0]}"
 st.markdown(
     f"<div class='cc-title'>🏈 Fantasy <span class='accent'>Command Center</span></div>"
     f"<div class='cc-sub'>{subtitle}</div>",
@@ -726,27 +749,7 @@ st.markdown(
 # ==================== DRAFT MODE ====================
 if mode == "Draft":
     # ---- Scoring + league size (manual unless a Sleeper league is connected) ----
-    if league:
-        sleeper_stamp = max(((p.get("sleeper_updated_at") or 0) for p in board), default=0)
-        hours_old = (time.time() - sleeper_stamp / 1000) / 3600 if sleeper_stamp else None
-        age_txt = f" Sleeper projections updated {hours_old:.0f}h ago." if hours_old is not None else ""
-        gaps = unprojected_bonus_keys(league["scoring_settings"])
-        gap_note = (
-            " Long-TD bonuses (40+/50+ yds) are not projected and are left out."
-            if gaps
-            else ""
-        )
-        with st.expander(f"Board: {league['name']} · {num_teams} teams · league scoring", expanded=False):
-            st.markdown(
-                f"<span class='rank-num'>Your league's scoring (yardage-game bonuses estimated "
-                f"from season totals), FLEX-aware replacement levels.{gap_note}<br>"
-                f"Projections: {projection_note}.{age_txt}</span>",
-                unsafe_allow_html=True,
-            )
-            if st.button("Refresh projections", help="Clear the cached feeds and rebuild the board (about 4s)"):
-                refresh_projections()
-                st.rerun()
-    else:
+    if not league:
         scoring_options = list(SCORING_LABELS.keys())
         st.radio(
             "League scoring",
@@ -778,25 +781,17 @@ if mode == "Draft":
     round_num = picks_made // num_teams + 1
     pick_in_round = picks_made % num_teams + 1
 
-    def stat_card(label, value):
-        return f"<div class='stat-card'><div class='stat-val'>{value}</div><div class='stat-lbl'>{label}</div></div>"
-
     next_pick = (st.session_state.draft_info or {}).get("next")
     if next_pick is None:
-        your_pick = "—"
+        your_pick = "draft order not published"
     elif next_pick["picks_until_mine"] == 0:
-        your_pick = "NOW"
+        your_pick = "<b style='color:#00e0a4'>YOU ARE ON THE CLOCK</b>"
     else:
-        your_pick = next_pick["picks_until_mine"]
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.markdown(
-        stat_card("Round · Pick", f"{round_num} · {pick_in_round}"),
-        unsafe_allow_html=True,
+        your_pick = f"your pick in <b>{next_pick['picks_until_mine']}</b>"
+    status_html = (
+        f"<span class='status-line'>Round <b>{round_num}</b> · Pick <b>{pick_in_round}</b> · "
+        f"<b>{picks_made}</b> picks made · roster <b>{len(my_roster)}</b>/{total_picks} · {your_pick}</span>"
     )
-    m2.markdown(stat_card("Overall Picks", picks_made), unsafe_allow_html=True)
-    m3.markdown(stat_card("Your Roster", len(my_roster)), unsafe_allow_html=True)
-    m4.markdown(stat_card("Your Pick In", your_pick), unsafe_allow_html=True)
 
     # reach = other teams' picks before I am on the clock (0 = my turn now);
     # horizon = picks between that turn and the one after, the "will he be there" window.
@@ -811,9 +806,9 @@ if mode == "Draft":
         gap_note = "in the next round (draft order not published yet)"
         panel_gap = num_teams
 
-    # ---- Live sync from the Sleeper draft room ----
+    # ---- Status strip: draft position on the left, Sleeper sync controls on the right ----
     if league and league.get("draft_id"):
-        sc1, sc2, sc3 = st.columns([1.2, 1.2, 4], vertical_alignment="center")
+        sc3, sc1, sc2 = st.columns([5, 1.1, 1.1], vertical_alignment="center")
         sc1.button("Sync picks", use_container_width=True, on_click=request_sync)
         auto_sync = sc2.toggle(
             "Auto-sync",
@@ -830,18 +825,18 @@ if mode == "Draft":
             info = st.session_state.draft_info
             if not info:
                 st.markdown(
-                    f"<span class='rank-num'>Not synced yet. Auto-sync polls every {SYNC_INTERVAL}.</span>",
+                    f"{status_html}<br><span class='rank-num'>Not synced yet. Auto-sync polls every {SYNC_INTERVAL}.</span>",
                     unsafe_allow_html=True,
                 )
                 return
             age = time.time() - st.session_state.get("last_sync_at", 0)
             stale = age > SYNC_STALE_SECONDS
-            color = "#fb923c" if stale else "#9aa4b2"
+            color = "#fb923c" if stale else "#7d8590"
             unmatched = f" · {info['unmatched']} unmatched" if info["unmatched"] else ""
             st.markdown(
-                f"<span class='rank-num' style='color:{color}'>Sleeper draft {str(info['status']).replace('_', '-')} · "
-                f"{info['picks']} picks{unmatched} · synced {int(age)}s ago"
-                f"{' ⚠️ stale' if stale else ''}</span>",
+                f"{status_html}<br><span class='rank-num' style='color:{color}'>"
+                f"Sleeper {str(info['status']).replace('_', '-')} · {info['picks']} picks{unmatched} · "
+                f"synced {int(age)}s ago{' ⚠️ stale' if stale else ''}</span>",
                 unsafe_allow_html=True,
             )
 
@@ -866,6 +861,8 @@ if mode == "Draft":
         else:
             with sc3:
                 render_heartbeat()
+    else:
+        st.markdown(status_html, unsafe_allow_html=True)
 
     # ---- Recommendation ----
     shortlist = rank_candidates(
@@ -919,87 +916,89 @@ if mode == "Draft":
             line2 = "Draft order not published yet: ranking by value and need only."
 
         photo = sleeper_photo(pick.get("player_id"))
-        rc1, rc2 = st.columns([1, 6], vertical_alignment="center")
-        if photo:
-            rc1.image(photo, width=80)
-        rc2.markdown(
-            f"<div class='rec-panel'><div class='rec-label'>Recommended Pick &nbsp;{pill}</div>"
-            f"<div class='rec-name'>{pick['name']} &nbsp; {badge(pos, tier)}{tier_chip}"
-            f"{status_badge(pick)}{news_badge(pick)}</div>"
-            f"<div class='rec-meta'>{line1}<br>{line2}</div></div>",
-            unsafe_allow_html=True,
-        )
-        b1, b2, _ = st.columns([1.4, 1.4, 4])
-        b1.button(
-            f"Draft {pick['name'].split()[-1]}",
-            type="primary",
-            on_click=draft_player,
-            args=(pick, True),
-            use_container_width=True,
-        )
-        b2.button("He got taken", on_click=draft_player, args=(pick, False), use_container_width=True)
-        others = shortlist[1:]
-        if others:
-            def alt_chip(c):
-                odds = ""
-                if c["mode"] == "reach":
-                    odds = f" · {c['reach']:.0%} reach"
-                elif c["mode"] == "now":
-                    odds = f" · {c['back']:.0%} back"
-                return (
-                    f"<span class='chip'>{c['player']['name']} <span style='color:#9aa4b2'>"
-                    f"{c['player']['position']} · VOR {c['vor']:.0f}{odds}</span></span>"
-                )
-            st.markdown(
-                "<div style='margin-top:2px'><span class='rank-num' style='margin-right:6px'>Next best:</span>"
-                + "".join(alt_chip(c) for c in others)
-                + "</div>",
+        with st.container(border=True):
+            rc1, rc2 = st.columns([1, 7], vertical_alignment="center")
+            if photo:
+                rc1.image(photo, width=72)
+            rc2.markdown(
+                f"<div class='rec-panel'><div class='rec-label'>Recommended Pick &nbsp;{pill}</div>"
+                f"<div class='rec-name'>{pick['name']} &nbsp; {badge(pos, tier)}{tier_chip}"
+                f"{status_badge(pick)}{news_badge(pick)}</div>"
+                f"<div class='rec-meta'>{line1}<br>{line2}</div></div>",
                 unsafe_allow_html=True,
             )
+            b1, b2, _ = st.columns([1.2, 1.2, 5], vertical_alignment="center")
+            b1.button(
+                f"Draft {pick['name'].split()[-1]}",
+                type="primary",
+                on_click=draft_player,
+                args=(pick, True),
+                use_container_width=True,
+            )
+            b2.button("He got taken", on_click=draft_player, args=(pick, False), use_container_width=True)
+            others = shortlist[1:]
+            if others:
+                def alt_chip(c):
+                    odds = ""
+                    if c["mode"] == "reach":
+                        odds = f" · {c['reach']:.0%} reach"
+                    elif c["mode"] == "now":
+                        odds = f" · {c['back']:.0%} back"
+                    return (
+                        f"<span class='chip'>{c['player']['name']} <span style='color:#9aa4b2'>"
+                        f"{c['player']['position']} · VOR {c['vor']:.0f}{odds}</span></span>"
+                    )
+                st.markdown(
+                    "<div style='margin-top:-4px'><span class='rank-num' style='margin-right:6px'>Next best</span>"
+                    + "".join(alt_chip(c) for c in others)
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
 
     # ---- Cost of waiting ----
     if horizon == 0:
-        waiting_title = "Cost of Waiting · you pick again right away"
+        waiting_title = "If you wait · you pick again right away"
     elif next_pick:
-        waiting_title = "Cost of Waiting · your next turn vs the one after"
+        waiting_title = "If you wait · cost by position and who is likely gone before your next pick"
     else:
-        waiting_title = "Cost of Waiting · assuming one round until your next pick"
-    st.markdown(f"<div class='sec-head'>{waiting_title}</div>", unsafe_allow_html=True)
-    waiting = cost_of_waiting(
-        available, ["QB", "RB", "WR", "TE"], picks_made,
-        horizon if horizon is not None else num_teams, reach_gap=reach,
-    )
-    wcols = st.columns(4)
-    for col, pos in zip(wcols, ["QB", "RB", "WR", "TE"]):
-        row = waiting.get(pos)
-        if not row:
-            col.markdown(f"<div style='text-align:center'>{badge(pos)}</div>", unsafe_allow_html=True)
-            continue
-        hot = row["cost"] >= 20
-        color = "#fb923c" if hot else "#9aa4b2"
-        col.markdown(
-            f"<div style='border:1px solid #1f2a3a;border-radius:8px;padding:8px 10px;line-height:1.6'>"
-            f"<div>{badge(pos)} <span style='color:#ffffff;font-weight:600'>{row['now']['name']}</span>"
-            f" <span class='mono'>{row['now']['vor']:.0f}</span></div>"
-            f"<div style='font-size:0.75rem;color:#9aa4b2'>if you wait <span class='mono'>{row['later']:.0f}</span>"
-            f" &nbsp;·&nbsp; <span style='color:{color};font-weight:700'>cost {row['cost']:.0f}{' ⚠️' if hot else ''}</span></div>"
-            f"</div>",
-            unsafe_allow_html=True,
+        waiting_title = "If you wait · cost by position and who is likely gone (assuming one round)"
+    wait_box = st.expander(waiting_title, expanded=False)
+    with wait_box:
+        waiting = cost_of_waiting(
+            available, ["QB", "RB", "WR", "TE"], picks_made,
+            horizon if horizon is not None else num_teams, reach_gap=reach,
         )
+        wcols = st.columns(4)
+        for col, pos in zip(wcols, ["QB", "RB", "WR", "TE"]):
+            row = waiting.get(pos)
+            if not row:
+                col.markdown(f"<div style='text-align:center'>{badge(pos)}</div>", unsafe_allow_html=True)
+                continue
+            hot = row["cost"] >= 20
+            color = "#fb923c" if hot else "#9aa4b2"
+            col.markdown(
+                f"<div style='border:1px solid #1f2a3a;border-radius:8px;padding:8px 10px;line-height:1.6'>"
+                f"<div>{badge(pos)} <span style='color:#ffffff;font-weight:600'>{row['now']['name']}</span>"
+                f" <span class='mono'>{row['now']['vor']:.0f}</span></div>"
+                f"<div style='font-size:0.75rem;color:#9aa4b2'>if you wait <span class='mono'>{row['later']:.0f}</span>"
+                f" &nbsp;·&nbsp; <span style='color:{color};font-weight:700'>cost {row['cost']:.0f}{' ⚠️' if hot else ''}</span></div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
-    # ---- Likely gone ----
-    gone = [p for p in likely_gone(available, picks_made, panel_gap, limit=7) if p is not pick][:6]
-    if gone:
-        chips = "".join(
-            f"<span class='chip'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · "
-            f"ADP {p['adp']:.0f} · {survival_probability(p['adp'], picks_made, panel_gap):.0%} back</span></span>"
-            for p in gone
-        )
-        st.markdown(
-            f"<div style='margin:8px 0 2px'><div class='rank-num' style='margin-bottom:4px'>Likely gone {gap_note}"
-            f"{f' ({panel_gap} picks)' if next_pick else ''}</div>{chips}</div>",
-            unsafe_allow_html=True,
-        )
+        # ---- Likely gone ----
+        gone = [p for p in likely_gone(available, picks_made, panel_gap, limit=7) if p is not pick][:6]
+        if gone:
+            chips = "".join(
+                f"<span class='chip'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · "
+                f"ADP {p['adp']:.0f} · {survival_probability(p['adp'], picks_made, panel_gap):.0%} back</span></span>"
+                for p in gone
+            )
+            st.markdown(
+                f"<div style='margin:8px 0 2px'><div class='rank-num' style='margin-bottom:4px'>Likely gone {gap_note}"
+                f"{f' ({panel_gap} picks)' if next_pick else ''}</div>{chips}</div>",
+                unsafe_allow_html=True,
+            )
 
     synced_draft = bool(league and league.get("draft_id") and st.session_state.auto_sync_pref)
     entry_box = (
@@ -1107,11 +1106,13 @@ if mode == "Draft":
         )
 
     sort_options = ["VOR", "Consensus", "ESPN", "Berry"]
-    sort_by = st.radio(
+    ctl_left, ctl_right = st.columns([2, 3], vertical_alignment="center")
+    sort_by = ctl_right.radio(
         "Sort by",
         options=sort_options,
         index=sort_options.index(st.session_state.sort_pref),
         horizontal=True,
+        label_visibility="collapsed",
         key="sort_widget",
         on_change=lambda: st.session_state.update(sort_pref=st.session_state.sort_widget),
     )
@@ -1134,9 +1135,9 @@ if mode == "Draft":
         shown.sort(key=lambda p: p.get("espn_rank") or 9999)
     elif sort_by == "Berry":
         shown.sort(key=lambda p: p.get("berry_rank") or 9999)
-    st.markdown(
+    ctl_left.markdown(
         f"<div style='color:#9aa4b2;font-size:0.85rem;margin:6px 0'>"
-        f"Showing {min(len(shown), TOP_N)} of {len(shown)} available"
+        f"Showing {min(len(shown), TOP_N)} of {len(shown)} available · sort by →"
         f"{'' if st.session_state.pos_filter == 'All' else ' ' + st.session_state.pos_filter}"
         f"</div>",
         unsafe_allow_html=True,
