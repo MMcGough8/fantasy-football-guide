@@ -85,12 +85,22 @@ html, body, [class*="css"] { font-family: 'Chakra Petch', sans-serif; }
 .rec-label { color:#00e0a4; letter-spacing:3px; font-size:0.72rem; text-transform:uppercase; margin-bottom:4px; }
 .rec-name { font-size:1.5rem; font-weight:700; color:#f0f6fc; }
 .rec-meta { color:#9aa4b2; font-size:0.9rem; margin-top:4px; font-family:'JetBrains Mono',monospace; }
+.badge { display:inline-block; white-space:nowrap; }
+.chip { display:inline-block; white-space:nowrap; background:#1f2a3a; color:#e5e7eb; border:1px solid #334155;
+        border-radius:4px; padding:1px 8px; margin:2px 6px 2px 0; font-family:'JetBrains Mono',monospace; font-size:0.78rem; }
+.tags > span { margin-right:4px; }
+/* popover trigger buttons inherit a light theme background; match the dark buttons */
+[data-testid="stPopover"] > button, [data-testid="stPopoverButton"] {
+  background:#131a26 !important; color:#e5e7eb !important; border:1px solid #1f2a3a !important; }
 .sec-head { color:#e6edf3; letter-spacing:2px; text-transform:uppercase; font-weight:600; font-size:0.95rem; border-bottom:1px solid #1f2a3a; padding-bottom:8px; margin:6px 0; }
 .badge { padding:2px 9px; border-radius:6px; font-weight:600; font-size:0.78rem; font-family:'JetBrains Mono',monospace; }
 .mono { font-family:'JetBrains Mono',monospace; color:#c9d1d9; }
 .rank-num { font-family:'JetBrains Mono',monospace; color:#4d5866; }
 .stButton > button { border-radius:8px; border:1px solid #2a3a4f; font-family:'Chakra Petch',sans-serif; letter-spacing:1px; font-weight:600; transition:all .15s ease; background:#1a2230; color:#ffffff; }
 .stButton > button:hover { border-color:#00e0a4; box-shadow:0 0 12px rgba(0,224,164,0.25); }
+.stButton > button[kind="primary"] { background:#00e0a4; color:#0b0f17; border-color:#00e0a4; }
+.stButton > button[kind="primary"]:hover { background:#33e8b6; color:#0b0f17; }
+.stFormSubmitButton > button[kind="primary"] { background:#00e0a4; color:#0b0f17; border-color:#00e0a4; }
 [data-testid="stSidebar"] { background:#0a0e15; border-right:1px solid #1a2230; }
 </style>
 """,
@@ -115,8 +125,9 @@ def status_badge(p):
         return ""
     c = "#f87171" if is_unavailable(p) else "#fbbf24"
     label = STATUS_SHORT.get(status, status)
-    if p.get("injury_body_part"):
-        label += f" · {p['injury_body_part']}"
+    part = p.get("injury_body_part")
+    if part and part.lower() != "undisclosed":
+        label += f" · {part}"
     return f" <span class='badge' style='background:{c}22;color:{c};border:1px solid {c}55;'>{label}</span>"
 
 
@@ -828,7 +839,7 @@ if mode == "Draft":
             color = "#fb923c" if stale else "#9aa4b2"
             unmatched = f" · {info['unmatched']} unmatched" if info["unmatched"] else ""
             st.markdown(
-                f"<span class='rank-num' style='color:{color}'>Sleeper draft {info['status']} · "
+                f"<span class='rank-num' style='color:{color}'>Sleeper draft {str(info['status']).replace('_', '-')} · "
                 f"{info['picks']} picks{unmatched} · synced {int(age)}s ago"
                 f"{' ⚠️ stale' if stale else ''}</span>",
                 unsafe_allow_html=True,
@@ -918,7 +929,7 @@ if mode == "Draft":
             f"<div class='rec-meta'>{line1}<br>{line2}</div></div>",
             unsafe_allow_html=True,
         )
-        b1, b2, b3 = st.columns([1.4, 1.4, 4])
+        b1, b2, _ = st.columns([1.4, 1.4, 4])
         b1.button(
             f"Draft {pick['name'].split()[-1]}",
             type="primary",
@@ -929,18 +940,20 @@ if mode == "Draft":
         b2.button("He got taken", on_click=draft_player, args=(pick, False), use_container_width=True)
         others = shortlist[1:]
         if others:
-            def alt_txt(c):
+            def alt_chip(c):
                 odds = ""
                 if c["mode"] == "reach":
                     odds = f" · {c['reach']:.0%} reach"
                 elif c["mode"] == "now":
                     odds = f" · {c['back']:.0%} back"
                 return (
-                    f"<span style='color:#ffffff'>{c['player']['name']}</span> "
-                    f"<span class='rank-num'>{c['player']['position']} {c['adjusted']:.0f}{odds}</span>"
+                    f"<span class='chip'>{c['player']['name']} <span style='color:#9aa4b2'>"
+                    f"{c['player']['position']} · VOR {c['vor']:.0f}{odds}</span></span>"
                 )
-            b3.markdown(
-                "<span class='rank-num'>Then:</span> " + " &nbsp;·&nbsp; ".join(alt_txt(c) for c in others),
+            st.markdown(
+                "<div style='margin-top:2px'><span class='rank-num' style='margin-right:6px'>Next best:</span>"
+                + "".join(alt_chip(c) for c in others)
+                + "</div>",
                 unsafe_allow_html=True,
             )
 
@@ -965,26 +978,26 @@ if mode == "Draft":
         hot = row["cost"] >= 20
         color = "#fb923c" if hot else "#9aa4b2"
         col.markdown(
-            f"<div style='text-align:center'>{badge(pos)}</div>"
-            f"<div style='font-size:0.78rem;color:#ffffff'>{row['now']['name']}"
+            f"<div style='border:1px solid #1f2a3a;border-radius:8px;padding:8px 10px;line-height:1.6'>"
+            f"<div>{badge(pos)} <span style='color:#ffffff;font-weight:600'>{row['now']['name']}</span>"
             f" <span class='mono'>{row['now']['vor']:.0f}</span></div>"
-            f"<div style='font-size:0.72rem;color:#9aa4b2'>if you wait: <span class='mono'>{row['later']:.0f}</span></div>"
-            f"<div style='font-size:0.78rem;color:{color};font-weight:700'>cost {row['cost']:.0f}{' ⚠️' if hot else ''}</div>",
+            f"<div style='font-size:0.75rem;color:#9aa4b2'>if you wait <span class='mono'>{row['later']:.0f}</span>"
+            f" &nbsp;·&nbsp; <span style='color:{color};font-weight:700'>cost {row['cost']:.0f}{' ⚠️' if hot else ''}</span></div>"
+            f"</div>",
             unsafe_allow_html=True,
         )
 
     # ---- Likely gone ----
     gone = [p for p in likely_gone(available, picks_made, panel_gap, limit=7) if p is not pick][:6]
     if gone:
-        chips = " ".join(
-            f"<span class='badge' style='background:#1f2a3a;color:#e5e7eb;border:1px solid #334155;"
-            f"margin:2px 4px 2px 0'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · "
+        chips = "".join(
+            f"<span class='chip'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · "
             f"ADP {p['adp']:.0f} · {survival_probability(p['adp'], picks_made, panel_gap):.0%} back</span></span>"
             for p in gone
         )
         st.markdown(
-            f"<div style='margin:6px 0 2px'><span class='rank-num'>Likely gone {gap_note}"
-            f"{f' ({panel_gap} picks)' if next_pick else ''}:</span> {chips}</div>",
+            f"<div style='margin:8px 0 2px'><div class='rank-num' style='margin-bottom:4px'>Likely gone {gap_note}"
+            f"{f' ({panel_gap} picks)' if next_pick else ''}</div>{chips}</div>",
             unsafe_allow_html=True,
         )
 
@@ -1182,48 +1195,51 @@ if mode == "Draft":
         )
 
         key = player_key(p)
-        c = st.columns([0.4, 3.0, 1.9, 1.9, 0.9, 0.9], vertical_alignment="center")
+        c = st.columns([0.3, 3.6, 2.7, 0.8, 0.8], vertical_alignment="center")
         c[0].markdown(f"<span class='rank-num'>{i:>2}</span>", unsafe_allow_html=True)
-        stack_tag = ""
-        if is_stack(p):
-            # Highlighted stack row: tinted background, glowing border, bold tag
-            c[1].markdown(
-                f"<div style='background:rgba(0,224,164,0.12);border-left:3px solid #00e0a4;"
-                f"border-radius:6px;padding:4px 10px;'>"
-                f"<span style='color:#ffffff;font-weight:700;'>{p['name']}</span> "
-                f"<span class='rank-num'>{p['team']}</span> "
-                f"<span style='background:#00e0a4;color:#0b0f17;font-size:0.68rem;"
-                f"font-weight:700;border-radius:4px;padding:1px 6px;margin-left:4px'>"
-                f"🔗 STACK</span></div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            c[1].markdown(
-                f"<span style='color:#ffffff;font-weight:600;'>{p['name']}</span> "
-                f"<span class='rank-num'>{p['team']}</span>",
-                unsafe_allow_html=True,
-            )
+
+        # Cell 1: name and team on line 1, every tag on line 2 (tags never wrap mid-chip)
         last_chip = (
             " <span class='badge' style='background:#fb923c22;color:#fb923c;border:1px solid #fb923c55'>LAST IN TIER</span>"
             if is_last_in_tier
             else ""
         )
-        c[2].markdown(
-            badge(p["position"], p.get("tier", "")) + last_chip + status_badge(p) + news_badge(p),
+        stack_chip = (
+            " <span style='background:#00e0a4;color:#0b0f17;font-size:0.68rem;font-weight:700;"
+            "border-radius:4px;padding:1px 6px'>🔗 STACK</span>"
+            if is_stack(p)
+            else ""
+        )
+        tags = badge(p["position"], p.get("tier", "")) + last_chip + status_badge(p) + news_badge(p) + stack_chip
+        name_style = "color:#ffffff;font-weight:700;" if is_stack(p) else "color:#ffffff;font-weight:600;"
+        wrap_style = (
+            "background:rgba(0,224,164,0.12);border-left:3px solid #00e0a4;border-radius:6px;padding:4px 10px;"
+            if is_stack(p)
+            else ""
+        )
+        c[1].markdown(
+            f"<div style='{wrap_style}line-height:1.5'>"
+            f"<span style='{name_style}'>{p['name']}</span> <span class='rank-num'>{p['team']}</span>"
+            f"<div class='tags' style='margin-top:2px'>{tags}</div></div>",
             unsafe_allow_html=True,
         )
-        # Line 1: value and the odds he is there at your next turn. Line 2: byes and market ranks.
+
+        # Cell 2: value and odds on line 1, bye and market ranks on line 2
         survive = ""
         if p.get("adp") and p["position"] not in LATE_ONLY_POSITIONS:
             odds = survival_probability(p["adp"], picks_made, panel_gap)
             color = "#f87171" if odds < 0.35 else ("#fbbf24" if odds < 0.65 else "#9aa4b2")
-            survive = f" <span style='color:{color};font-size:0.75rem' title='Odds he is still there at your next turn'>{odds:.0%} back</span>"
+            survive = (
+                f" <span style='color:{color};font-size:0.75rem;white-space:nowrap' "
+                f"title='Odds he is still there at your next turn'>{odds:.0%} back</span>"
+            )
         split = ""
         if p.get("disagreement"):
-            split += f" <span style='color:#fbbf24;font-size:0.7rem'>⚡ SPLIT ({p.get('rank_spread')})</span>"
+            split += f" <span style='color:#fbbf24;font-size:0.7rem;white-space:nowrap'>⚡ SPLIT {p.get('rank_spread')}</span>"
         if sources_disagree(p):
             split += (
-                f" <span style='color:#e879f9;font-size:0.7rem' title='{source_txt(p).strip(' ()')}'>📊 sources split</span>"
+                f" <span style='color:#e879f9;font-size:0.7rem;white-space:nowrap' "
+                f"title='{source_txt(p).strip(' ()')}'>📊 split</span>"
             )
         detail = []
         if p.get("bye"):
@@ -1234,12 +1250,12 @@ if mode == "Draft":
             detail.append(f"ESPN {p['espn_rank']}")
         if p.get("berry_rank"):
             detail.append(f"Berry {p['berry_rank']}")
-        c[3].markdown(
-            f"<span class='mono'>VOR {p['vor']} · {p['points']}</span>{survive}{split}"
-            f"<br><span class='rank-num'>{' · '.join(detail)}</span>",
+        c[2].markdown(
+            f"<div style='line-height:1.5'><span class='mono' style='white-space:nowrap'>VOR {p['vor']:.0f} · {p['points']:.0f} pts</span>"
+            f"{survive}{split}<br><span class='rank-num'>{' · '.join(detail)}</span></div>",
             unsafe_allow_html=True,
         )
-        c[4].button(
+        c[3].button(
             "Mine",
             key=f"mine_{i}_{key}",
             on_click=draft_player,
@@ -1247,7 +1263,7 @@ if mode == "Draft":
             type="primary",
             use_container_width=True,
         )
-        c[5].button(
+        c[4].button(
             "Taken",
             key=f"taken_{i}_{key}",
             on_click=draft_player,
