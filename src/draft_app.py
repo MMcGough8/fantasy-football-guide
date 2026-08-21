@@ -287,11 +287,9 @@ board_by_id = index_board_by_player_id(board)
 
 # Synced picks are the truth from Sleeper; manual Mine/Taken marks layer on top.
 synced_taken = st.session_state.synced_taken
-synced_mine_keys = {player_key(p) for p in st.session_state.synced_mine}
 drafted_keys = st.session_state.drafted | synced_taken
 my_roster = st.session_state.synced_mine + [
-    p for p in st.session_state.my_roster
-    if player_key(p) not in synced_taken or player_key(p) in synced_mine_keys
+    p for p in st.session_state.my_roster if player_key(p) not in synced_taken
 ]
 available = [p for p in board if player_key(p) not in drafted_keys]
 available.sort(key=lambda p: p["vor"], reverse=True)

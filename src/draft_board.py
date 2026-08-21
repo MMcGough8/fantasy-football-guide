@@ -102,16 +102,19 @@ def fetch_position(position, scoring="pts_ppr", scoring_settings=None, extra_sou
                 # games played drives the per-game bonus estimate; not every feed has it
                 line = {**line, "gp": sleeper_stats["gp"]}
             lines[source] = line
-        stats = blend_stats(list(lines.values())) if len(lines) > 1 else sleeper_stats
-        points = _points(stats, scoring, scoring_settings, position)
-        if points is None or points < MIN_POINTS:
-            continue
+        # A feed that scores a player at zero (Sleeper publishes empty stat lines
+        # for IR players) is not a source; drop it so `sources` stays honest.
         points_by_source = {
             source: _points(line, scoring, scoring_settings, position) for source, line in lines.items()
         }
-        points_by_source = {
-            s: round(v, 1) for s, v in points_by_source.items() if v is not None
-        }
+        lines = {s: line for s, line in lines.items() if (points_by_source.get(s) or 0) > 0}
+        if not lines:
+            continue
+        stats = blend_stats(list(lines.values())) if len(lines) > 1 else next(iter(lines.values()))
+        points = _points(stats, scoring, scoring_settings, position)
+        if points is None or points < MIN_POINTS:
+            continue
+        points_by_source = {s: round(points_by_source[s], 1) for s in lines}
 
         players.append(
             {

@@ -45,23 +45,26 @@ class EspnError(Exception):
     """Raised for any failure talking to ESPN, with a user-facing message."""
 
 
-def _season_projection(player):
+def _season_projection(player, season):
+    """The full-season projection block for `season`. ESPN also ships last
+    season's block first, so never take the first match."""
     for s in player.get("stats") or []:
         if (
             s.get("statSourceId") == PROJECTION_SOURCE_ID
             and s.get("statSplitTypeId") == SEASON_SPLIT_ID
+            and str(s.get("seasonId")) == str(season)
         ):
             return s
     return None
 
 
-def parse_players(entries, position):
+def parse_players(entries, position, season):
     """Return {match_key: {"stats", "espn_rank", "adp"}} for one position."""
     rows = {}
     for entry in entries:
         player = entry.get("player") or {}
         name = player.get("fullName")
-        proj = _season_projection(player)
+        proj = _season_projection(player, season)
         if not name or proj is None:
             continue
         stats = {
@@ -104,7 +107,7 @@ def fetch_position(position, season):
     entries = payload.get("players") if isinstance(payload, dict) else None
     if entries is None:
         raise EspnError("ESPN response had no players")
-    return parse_players(entries, position)
+    return parse_players(entries, position, season)
 
 
 def fetch_all(season):

@@ -41,7 +41,7 @@ def _fake_api(espn_sample):
 
 
 def test_parse_players_maps_stat_ids_to_sleeper_keys(espn_sample):
-    rows = parse_players(espn_sample["RB"]["players"], "RB")
+    rows = parse_players(espn_sample["RB"]["players"], "RB", "2026")
     gibbs = rows[match_key("Jahmyr Gibbs", "RB")]
     assert gibbs["stats"]["rush_yd"] == pytest.approx(1372.6, abs=0.1)
     assert gibbs["stats"]["rush_td"] == pytest.approx(14.45, abs=0.05)
@@ -55,7 +55,7 @@ def test_parse_players_maps_stat_ids_to_sleeper_keys(espn_sample):
 
 
 def test_parse_players_qb_passing_stats(espn_sample):
-    allen = parse_players(espn_sample["QB"]["players"], "QB")[match_key("Josh Allen", "QB")]
+    allen = parse_players(espn_sample["QB"]["players"], "QB", "2026")[match_key("Josh Allen", "QB")]
     assert allen["stats"]["pass_yd"] == pytest.approx(3946.4, abs=0.1)
     assert allen["stats"]["pass_td"] == pytest.approx(26.3, abs=0.1)
     assert allen["stats"]["pass_int"] == pytest.approx(11.6, abs=0.1)
@@ -63,9 +63,9 @@ def test_parse_players_qb_passing_stats(espn_sample):
 
 
 def test_kicker_and_defense_use_applied_total_as_preset(espn_sample):
-    aubrey = parse_players(espn_sample["K"]["players"], "K")[match_key("Brandon Aubrey", "K")]
+    aubrey = parse_players(espn_sample["K"]["players"], "K", "2026")[match_key("Brandon Aubrey", "K")]
     assert aubrey["stats"]["pts_std"] == pytest.approx(171.7, abs=0.1)
-    texans = parse_players(espn_sample["DST"]["players"], "DEF")[match_key("Houston Texans", "DEF")]
+    texans = parse_players(espn_sample["DST"]["players"], "DEF", "2026")[match_key("Houston Texans", "DEF")]
     assert texans["stats"]["pts_std"] == pytest.approx(131.1, abs=0.1)
 
 
@@ -91,3 +91,11 @@ def test_match_key_defenses_by_nickname():
     assert match_key("Commanders D/ST", "DEF") == match_key("Washington Commanders", "DEF")
     assert match_key("Amon-Ra St. Brown", "WR") == match_key("Amon-Ra St Brown", "WR")
     assert match_key("Marvin Harrison Jr.", "WR") == match_key("Marvin Harrison", "WR")
+
+
+def test_previous_season_block_is_skipped(espn_sample):
+    gibbs_blocks = espn_sample["RB"]["players"][0]["player"]["stats"]
+    assert [b["seasonId"] for b in gibbs_blocks] == [2025, 2026], "fixture must carry both blocks"
+    rows = parse_players(espn_sample["RB"]["players"], "RB", "2026")
+    assert rows[match_key("Jahmyr Gibbs", "RB")]["stats"]["pts_ppr"] == pytest.approx(364.9, abs=0.1)
+    assert parse_players(espn_sample["RB"]["players"], "RB", "2027") == {}

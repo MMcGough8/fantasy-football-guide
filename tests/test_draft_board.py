@@ -144,3 +144,23 @@ def test_adp_key_follows_reception_scoring():
     assert adp_key_for("pts_ppr", {"rec": 0.4}) == "adp_half_ppr"
     assert adp_key_for("pts_ppr", {"rec": 1.0}) == "adp_ppr"
     assert adp_key_for("pts_ppr", {"rec": 0.0}) == "adp_std"
+
+
+def test_zero_point_sleeper_line_is_not_counted_as_a_source(monkeypatch, projections, league):
+    """Sleeper ships only gp/adp for IR players; that must not masquerade as a projection."""
+    ir_only = dict(projections)
+    ir_only["RB"] = [dict(projections["RB"][0], stats={"gp": 18.0, "adp_half_ppr": 90.0})]
+    monkeypatch.setattr(draft_board.requests, "get", _fake_projections(ir_only))
+    key = match_key("Jahmyr Gibbs", "RB")
+    espn_line = {"rush_yd": 1200, "rush_td": 10, "rec": 40, "rec_yd": 300, "rec_td": 2, "fum_lost": 1}
+    players = fetch_position(
+        "RB", "pts_ppr", scoring_settings=league["scoring_settings"],
+        extra_sources={"espn": {key: espn_line}},
+    )
+    gibbs = next(p for p in players if p["name"] == "Jahmyr Gibbs")
+    assert gibbs["sources"] == 1
+    assert set(gibbs["points_by_source"]) == {"espn"}
+    # and with no other source at all, the player drops off the board
+    assert fetch_position("RB", "pts_ppr", scoring_settings=league["scoring_settings"]) == [
+        p for p in fetch_position("RB", "pts_ppr", scoring_settings=league["scoring_settings"]) if p["name"] != "Jahmyr Gibbs"
+    ]
