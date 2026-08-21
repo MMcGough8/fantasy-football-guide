@@ -4,7 +4,7 @@ import requests
 from roster_slots import starters_from_roster_positions
 
 BASE_URL = "https://api.sleeper.app/v1"
-TIMEOUT_SECONDS = 15
+TIMEOUT_SECONDS = 8  # draft polling must fail fast; the next poll retries
 DYNASTY_LEAGUE_TYPE = 2
 
 

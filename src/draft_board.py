@@ -124,6 +124,7 @@ def fetch_position(position, scoring="pts_ppr", scoring_settings=None, extra_sou
                 "team": info.get("team") or "FA",
                 "points": round(points, 1),
                 "points_by_source": points_by_source,
+                "sleeper_updated_at": rec.get("updated_at"),
                 "sources": len(lines),
                 "adp": sleeper_stats.get(adp_key),
                 "years_exp": info.get("years_exp"),

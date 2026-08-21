@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -10,7 +11,7 @@ from draft_board import build_board
 from categories import sleepers, top_rookies, boom_ceiling, high_floor
 from grader import grade_draft
 from roster_slots import allocate_slots
-from recommend import recommend_pick
+from recommend import LATE_ONLY_POSITIONS, LATE_ROUND_WINDOW, recommend_pick
 from pick_sync import apply_picks, index_board_by_player_id, next_pick_info
 import sleeper_league
 from sleeper_league import SleeperError
@@ -29,7 +30,8 @@ REQUIRED_LEAGUE_KEYS = ("league_id", "name", "num_teams", "starters", "bench", "
 DEFAULT_BENCH_SPOTS = 8
 SEASON = "2026"
 SYNC_INTERVAL = "15s"  # how often auto-sync polls the Sleeper draft
-FP_CACHE_SECONDS = 6 * 3600
+FEED_CACHE_SECONDS = 1800  # projections refresh twice an hour; a rebuild takes ~4 s
+SYNC_STALE_SECONDS = 45  # heartbeat turns orange when the last sync is older than this
 SOURCE_SPLIT_PCT = 0.15  # flag a player when Sleeper and FantasyPros differ by this much
 LEAGUE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".sleeper_league.json"
@@ -101,17 +103,33 @@ def espn_photo(player_id):
     return f"https://a.espncdn.com/i/headshots/nfl/players/full/{player_id}.png"
 
 
-@st.cache_data(ttl=FP_CACHE_SECONDS, show_spinner="Loading FantasyPros consensus...")
+class DegradedBoard(Exception):
+    """A board built with a feed missing. Raised (not returned) from the cached loader so
+    Streamlit does not cache it and the missing feed is retried on the next run."""
+
+    def __init__(self, board, note):
+        super().__init__(note)
+        self.board = board
+        self.note = note
+
+
+@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading FantasyPros consensus...")
 def load_fantasypros(season):
     return fantasypros.fetch_all(season, os.getenv("FANTASYPROS_API_KEY", "").strip())
 
 
-@st.cache_data(ttl=FP_CACHE_SECONDS, show_spinner="Loading ESPN projections...")
+@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading ESPN projections...")
 def load_espn(season):
     return espn_projections.fetch_all(season)
 
 
-@st.cache_data(show_spinner="Loading projections from Sleeper...")
+def refresh_projections():
+    load_board.clear()
+    load_fantasypros.clear()
+    load_espn.clear()
+
+
+@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading projections from Sleeper...")
 def load_board(scoring, num_teams, scoring_items, starters_items, use_fantasypros):
     """Returns (board, projection_note). Dicts arrive as sorted tuples so the cache can hash them."""
     scoring_settings = dict(scoring_items) if scoring_items else None
@@ -145,6 +163,8 @@ def load_board(scoring, num_teams, scoring_items, starters_items, use_fantasypro
     board = build_board(
         scoring, num_teams, scoring_settings, dict(starters_items), extra or None, live_ranks
     )
+    if problems:
+        raise DegradedBoard(board, note)
     return board, note
 
 
@@ -253,6 +273,10 @@ if "league" not in st.session_state:
     st.session_state.league = load_saved_league()
 if "draft_info" not in st.session_state:
     st.session_state.draft_info = None
+if "auto_sync_pref" not in st.session_state:
+    st.session_state.auto_sync_pref = bool((st.session_state.league or {}).get("draft_id"))
+if "sort_pref" not in st.session_state:
+    st.session_state.sort_pref = "VOR"
 
 # ---- Load board (needed by player search in both modes) ----
 # ---- League config: a connected Sleeper league overrides the manual radios ----
@@ -278,6 +302,8 @@ try:
         tuple(sorted(starters.items())),
         bool(os.getenv("FANTASYPROS_API_KEY", "").strip()),
     )
+except DegradedBoard as degraded:
+    board, projection_note = degraded.board, degraded.note + " (retrying)"
 except Exception as e:
     st.error(f"Couldn't load projections from Sleeper: {e}")
     c1, c2 = st.columns(2)
@@ -317,19 +343,38 @@ def sync_picks_from_sleeper():
 
     new_taken = {player_key(p) for p in result.taken}
     new_mine_keys = [player_key(p) for p in result.mine]
-    changed = (
-        new_taken != st.session_state.synced_taken
-        or new_mine_keys != [player_key(p) for p in st.session_state.synced_mine]
-    )
-    st.session_state.synced_taken = new_taken
-    st.session_state.synced_mine = result.mine
-    st.session_state.draft_info = {
+    previous = st.session_state.draft_info or {}
+    new_info = {
         "status": draft.get("status"),
+        "has_order": bool(draft.get("draft_order")),
         "picks": len(picks),
         "next": next_pick_info(draft, len(picks), league["user_id"]),
         "unmatched": len(result.unmatched),
     }
+    changed = (
+        new_taken != st.session_state.synced_taken
+        or new_mine_keys != [player_key(p) for p in st.session_state.synced_mine]
+        or new_info["status"] != previous.get("status")
+        or new_info["has_order"] != previous.get("has_order")
+    )
+    st.session_state.synced_taken = new_taken
+    st.session_state.synced_mine = result.mine
+    st.session_state.draft_info = new_info
+    st.session_state.last_sync_at = time.time()
     return changed
+
+
+def request_sync():
+    st.session_state.sync_requested = True
+
+
+if league and league.get("draft_id") and st.session_state.pop("sync_requested", False):
+    # Runs before any widget renders, so a manual sync never resets widget state
+    try:
+        sync_picks_from_sleeper()
+    except SleeperError as e:
+        st.session_state.sync_error_text = str(e)
+        st.session_state.sync_error = True
 
 
 # ==================== SIDEBAR ====================
@@ -392,31 +437,33 @@ with st.sidebar:
                 st.rerun()
     st.divider()
 
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def load_top_stories(player_names):
-        from news import get_top_stories
-
-        # player_names is a tuple (hashable for caching); empty = general news
-        return get_top_stories(list(player_names) if player_names else None)
-
-    # Build a stable, hashable key from the current roster
-    roster_names = tuple(sorted(p["name"] for p in my_roster))
+    roster_names = [p["name"] for p in my_roster]
     label = "📰 Your Players" if roster_names else "📰 The Latest"
 
     with st.expander(label, expanded=False):
-        try:
-            for s in load_top_stories(roster_names):
-                st.markdown(
-                    f"<div style='margin-bottom:8px'>"
-                    f"<span style='color:#00e0a4;font-size:0.72rem'>{s['player']}</span><br>"
-                    f"<span style='color:#ffffff;font-size:0.85rem'>{s['headline']}</span></div>",
-                    unsafe_allow_html=True,
-                )
-        except Exception:
+        # Only a click spends a Claude call; nothing here runs on a rerun.
+        if st.button("Refresh news", use_container_width=True):
+            from news import get_top_stories
+
+            with st.spinner("Searching..."):
+                try:
+                    st.session_state.top_stories = get_top_stories(roster_names or None)
+                except Exception as e:
+                    st.session_state.top_stories = {"error": str(e)}
+        stories = st.session_state.get("top_stories")
+        if isinstance(stories, dict):
             st.markdown(
-                "<span class='rank-num'>News unavailable right now</span>",
+                f"<span class='rank-num'>News unavailable: {stories['error'][:120]}</span>",
                 unsafe_allow_html=True,
             )
+        elif stories:
+            for story in stories:
+                st.markdown(
+                    f"<div style='margin-bottom:8px'>"
+                    f"<span style='color:#00e0a4;font-size:0.72rem'>{story['player']}</span><br>"
+                    f"<span style='color:#ffffff;font-size:0.85rem'>{story['headline']}</span></div>",
+                    unsafe_allow_html=True,
+                )
 
     # ---- Player Search ----
     st.markdown("<div class='sec-head'>Player Search</div>", unsafe_allow_html=True)
@@ -590,6 +637,9 @@ st.markdown(
 if mode == "Draft":
     # ---- Scoring + league size (manual unless a Sleeper league is connected) ----
     if league:
+        sleeper_stamp = max((p.get("sleeper_updated_at") or 0) for p in board)
+        hours_old = (time.time() - sleeper_stamp / 1000) / 3600 if sleeper_stamp else None
+        age_txt = f" Sleeper projections updated {hours_old:.0f}h ago." if hours_old is not None else ""
         gaps = unprojected_bonus_keys(league["scoring_settings"])
         gap_note = (
             " Long-TD bonuses (40+/50+ yds) are not projected and are left out."
@@ -600,9 +650,12 @@ if mode == "Draft":
             f"<span class='rank-num'>Board built for <b>{league['name']}</b>: "
             f"{num_teams} teams, your league's scoring (yardage-game bonuses estimated "
             f"from season totals), FLEX-aware replacement levels.{gap_note}<br>"
-            f"Projections: {projection_note}.</span>",
+            f"Projections: {projection_note}.{age_txt}</span>",
             unsafe_allow_html=True,
         )
+        if st.button("Refresh projections", help="Clear the cached feeds and rebuild the board (about 4s)"):
+            refresh_projections()
+            st.rerun()
     else:
         scoring_options = list(SCORING_LABELS.keys())
         st.radio(
@@ -658,19 +711,27 @@ if mode == "Draft":
     # ---- Live sync from the Sleeper draft room ----
     if league and league.get("draft_id"):
         sc1, sc2, sc3 = st.columns([1.2, 1.2, 4], vertical_alignment="center")
-        if sc1.button("Sync picks", use_container_width=True):
-            try:
-                sync_picks_from_sleeper()
-                st.rerun()
-            except SleeperError as e:
-                st.error(str(e))
-        auto_sync = sc2.toggle("Auto-sync", key="auto_sync")
+        sc1.button("Sync picks", use_container_width=True, on_click=request_sync)
+        auto_sync = sc2.toggle(
+            "Auto-sync",
+            value=st.session_state.auto_sync_pref,
+            key="auto_sync_widget",
+            on_change=lambda: st.session_state.update(
+                auto_sync_pref=st.session_state.auto_sync_widget
+            ),
+        )
+        if st.session_state.pop("sync_error", None):
+            st.error(st.session_state.get("sync_error_text", "Sync failed"))
         info = st.session_state.draft_info
         if info:
+            age = time.time() - st.session_state.get("last_sync_at", 0)
+            stale = age > SYNC_STALE_SECONDS
+            color = "#fb923c" if stale else "#9aa4b2"
             unmatched = f" · {info['unmatched']} unmatched" if info["unmatched"] else ""
             sc3.markdown(
-                f"<span class='rank-num'>Sleeper draft {info['status']} · "
-                f"{info['picks']} picks synced{unmatched}</span>",
+                f"<span class='rank-num' style='color:{color}'>Sleeper draft {info['status']} · "
+                f"{info['picks']} picks{unmatched} · synced {int(age)}s ago"
+                f"{' ⚠️ stale' if stale else ''}</span>",
                 unsafe_allow_html=True,
             )
         else:
@@ -798,21 +859,31 @@ if mode == "Draft":
     fcols = st.columns(len(filters))
     for col, pos in zip(fcols, filters):
         btn_type = "primary" if st.session_state.pos_filter == pos else "secondary"
-        if col.button(
-            pos, key=f"filter_{pos}", type=btn_type, use_container_width=True
-        ):
-            st.session_state.pos_filter = pos
-            st.rerun()
+        col.button(
+            pos,
+            key=f"filter_{pos}",
+            type=btn_type,
+            use_container_width=True,
+            on_click=lambda pos=pos: st.session_state.update(pos_filter=pos),
+        )
 
+    sort_options = ["VOR", "Consensus", "ESPN", "Berry"]
     sort_by = st.radio(
         "Sort by",
-        options=["VOR", "Consensus", "ESPN", "Berry"],
+        options=sort_options,
+        index=sort_options.index(st.session_state.sort_pref),
         horizontal=True,
-        key="sort_by",
+        key="sort_widget",
+        on_change=lambda: st.session_state.update(sort_pref=st.session_state.sort_widget),
     )
 
+    in_late_window = total_picks - len(my_roster) <= LATE_ROUND_WINDOW
     if st.session_state.pos_filter == "All":
-        shown = list(available)
+        # K/DEF are last-round picks; keep them off the main list until then
+        shown = [
+            p for p in available
+            if in_late_window or p["position"] not in LATE_ONLY_POSITIONS
+        ]
     else:
         shown = [p for p in available if p["position"] == st.session_state.pos_filter]
 
