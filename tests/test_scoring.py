@@ -71,3 +71,25 @@ def test_unprojected_bonus_keys_are_reported(league):
 
 def test_no_scoring_settings_returns_none():
     assert score_stats({"pass_yd": 300, "pts_std": 10}, None, "QB") is None
+
+
+def test_count_stat_bonus_uses_its_own_spread(league):
+    # 2 carries a game should get essentially nothing for a 20-carry bonus
+    light = estimate_threshold_bonuses({"rush_att": 34, "gp": 17}, league["scoring_settings"])
+    assert light.get("bonus_rush_att_20", 0) < 0.05
+    # a 300-carry workhorse (17.6 a game) clears 20 carries in roughly a third of games
+    heavy = estimate_threshold_bonuses({"rush_att": 300, "gp": 17}, league["scoring_settings"])
+    assert 8 < heavy["bonus_rush_att_20"] < 16
+
+
+def test_hundred_yard_game_estimate_is_close_to_history(league):
+    # Derrick Henry 2020: 2027 rushing yards in 16 games, 10 hundred-yard games
+    est = estimate_threshold_bonuses({"rush_yd": 2027, "gp": 16}, league["scoring_settings"])
+    games = est["bonus_rush_yd_100"] / league["scoring_settings"]["bonus_rush_yd_100"]
+    assert 9 <= games <= 12
+
+
+def test_games_played_is_capped_at_a_real_season(league):
+    eighteen = estimate_threshold_bonuses({"rush_yd": 1700, "gp": 18}, league["scoring_settings"])
+    seventeen = estimate_threshold_bonuses({"rush_yd": 1700, "gp": 17}, league["scoring_settings"])
+    assert eighteen == seventeen

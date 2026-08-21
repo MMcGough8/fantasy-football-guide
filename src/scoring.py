@@ -13,10 +13,14 @@ PRESET_FALLBACK_KEY = "pts_std"
 #   bonus_rush_yd_100 -> rush_yd >= 100, bonus_pass_cmp_25 -> pass_cmp >= 25.
 THRESHOLD_BONUS = re.compile(r"^bonus_(pass_yd|rush_yd|rec_yd|rush_att|pass_cmp)_(\d+)$")
 
-# Per-game spread, as a fraction of the per-game mean plus a floor. Rough but
-# directionally right: a 100 yd/game back clears 100 in about half his games.
-PER_GAME_SD_RATIO = 0.4
+# Per-game spread for yardage stats, as a fraction of the per-game mean plus a
+# floor. Checked against 14 real seasons; a 100 yd/game back clears 100 in about
+# half his games.
+PER_GAME_SD_RATIO = 0.33
 PER_GAME_SD_FLOOR = 10.0
+# Count stats (carries, completions) vary far less game to game than yards.
+COUNT_STAT_SD = {"rush_att": 5.0, "pass_cmp": 5.5}
+MAX_GAMES = 17  # Sleeper reports 18 (weeks, not games) for every player
 
 
 def _normal_tail(z):
@@ -26,7 +30,7 @@ def _normal_tail(z):
 
 def estimate_threshold_bonuses(stats, scoring_settings):
     """Expected bonus points per threshold key, estimated from season totals."""
-    games = stats.get("gp") or 0
+    games = min(stats.get("gp") or 0, MAX_GAMES)
     if games <= 0:
         return {}
     estimates = {}
@@ -39,7 +43,7 @@ def estimate_threshold_bonuses(stats, scoring_settings):
         if season_total <= 0:
             continue
         per_game = season_total / games
-        sd = PER_GAME_SD_RATIO * per_game + PER_GAME_SD_FLOOR
+        sd = COUNT_STAT_SD.get(stat, PER_GAME_SD_RATIO * per_game + PER_GAME_SD_FLOOR)
         expected_games = games * _normal_tail((threshold - per_game) / sd)
         estimates[key] = round(expected_games * weight, 2)
     return estimates
