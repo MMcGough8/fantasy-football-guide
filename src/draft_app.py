@@ -4,6 +4,7 @@ import time
 
 import streamlit as st
 from dotenv import load_dotenv
+from streamlit_js_eval import streamlit_js_eval
 
 load_dotenv()  # secrets come from .env at the repo root, never from code
 from collections import Counter
@@ -39,6 +40,7 @@ REQUIRED_LEAGUE_KEYS = ("league_id", "name", "num_teams", "starters", "bench", "
 DEFAULT_BENCH_SPOTS = 8
 SEASON = "2026"
 SYNC_INTERVAL = "15s"  # how often auto-sync polls the Sleeper draft
+COMPACT_BELOW_PX = 1100  # browser width under which the compact layout switches on by itself
 SYNC_INTERVAL_NEAR_TURN = "5s"  # within NEAR_TURN_PICKS of my turn, poll faster
 NEAR_TURN_PICKS = 2
 FEED_CACHE_SECONDS = 1800  # projections refresh twice an hour; a rebuild takes ~4 s
@@ -101,6 +103,7 @@ html, body, [class*="css"] { font-family: 'Chakra Petch', sans-serif; }
 .rank-num { font-family:'JetBrains Mono',monospace; color:#4d5866; }
 .stButton > button, .stFormSubmitButton > button { border-radius:8px; border:1px solid #2a3a4f; font-family:'Chakra Petch',sans-serif; letter-spacing:0.5px; font-weight:600; transition:all .15s ease; background:#1a2230; color:#ffffff; white-space:nowrap; padding-left:10px; padding-right:10px; min-width:0; }
 .stButton > button p, .stFormSubmitButton > button p { white-space:nowrap; }
+[data-testid="stToggle"] label p, [data-testid="stCheckbox"] label p { white-space:nowrap; }
 .stButton > button:hover { border-color:#00e0a4; box-shadow:0 0 12px rgba(0,224,164,0.25); }
 .stButton > button[kind="primary"] { background:#00e0a4; color:#0b0f17; border-color:#00e0a4; }
 .stButton > button[kind="primary"]:hover { background:#33e8b6; color:#0b0f17; }
@@ -348,8 +351,10 @@ if "auto_sync_pref" not in st.session_state:
     st.session_state.auto_sync_pref = bool((st.session_state.league or {}).get("draft_id"))
 if "sort_pref" not in st.session_state:
     st.session_state.sort_pref = "VOR"
-if "compact_pref" not in st.session_state:
-    st.session_state.compact_pref = st.query_params.get("compact") in ("1", "true")
+if "layout_pref" not in st.session_state:
+    # "Auto" follows the browser width; ?compact=1 / ?compact=0 pin it
+    q = st.query_params.get("compact")
+    st.session_state.layout_pref = "Auto" if q is None else ("Compact" if q in ("1", "true") else "Wide")
 
 # ---- Load board (needed by player search in both modes) ----
 # ---- League config: a connected Sleeper league overrides the manual radios ----
@@ -481,14 +486,21 @@ if league and league.get("draft_id") and st.session_state.pop("sync_requested", 
 
 # ==================== SIDEBAR ====================
 with st.sidebar:
-    # ---- Layout: compact rows for a narrow window (side by side with the draft room) ----
-    st.toggle(
-        "Compact layout (narrow window)",
-        value=st.session_state.compact_pref,
-        key="compact_widget",
-        on_change=lambda: st.session_state.update(compact_pref=st.session_state.compact_widget),
+    # ---- Layout: compact rows for a narrow window (side by side with the draft room).
+    # Follows the browser width unless the owner flips the toggle.
+    viewport_w = streamlit_js_eval(js_expressions="window.parent.innerWidth", key="viewport_w")
+    compact_auto = bool(viewport_w) and viewport_w < COMPACT_BELOW_PX
+    layout_options = ["Auto", "Wide", "Compact"]
+    st.radio(
+        "Layout",
+        options=layout_options,
+        index=layout_options.index(st.session_state.layout_pref),
+        horizontal=True,
+        key="layout_widget",
+        on_change=lambda: st.session_state.update(layout_pref=st.session_state.layout_widget),
+        help=f"Auto switches to the compact layout when the window is narrower than {COMPACT_BELOW_PX}px",
     )
-    compact = st.session_state.compact_pref
+    compact = {"Auto": compact_auto, "Wide": False, "Compact": True}[st.session_state.layout_pref]
 
     # ---- Mode toggle (top); hidden while a draft is live so it cannot be bumped ----
     draft_live = (st.session_state.draft_info or {}).get("status") == "drafting"

@@ -56,3 +56,4 @@ websockets==16.0
 
 # dev
 pytest
+streamlit-js-eval==1.0.0
