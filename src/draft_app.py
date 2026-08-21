@@ -26,6 +26,7 @@ from espn_ranks import match_key
 import sleeper_league
 from sleeper_league import SleeperError
 from draft_state import load_state, save_state
+from opponents import demand_multipliers
 from scoring import PRESET_FALLBACK_POSITIONS, scoring_summary, unprojected_bonus_keys
 import fantasypros
 from fantasypros import FantasyProsError
@@ -506,6 +507,17 @@ def sync_picks_from_sleeper():
         "picks": len(picks),
         "next": next_pick_info(draft, len(picks), league["user_id"]),
         "unmatched": len(result.unmatched),
+        # What the opponent-needs model reads: the order and who has taken what
+        "draft_meta": {
+            "type": draft.get("type"),
+            "draft_order": draft.get("draft_order"),
+            "slot_to_roster_id": draft.get("slot_to_roster_id"),
+            "settings": {k: (draft.get("settings") or {}).get(k) for k in ("teams", "rounds", "reversal_round")},
+        },
+        "pick_positions": [
+            {"roster_id": pk.get("roster_id"), "metadata": {"position": (pk.get("metadata") or {}).get("position")}}
+            for pk in picks
+        ],
         "unmatched_names": [
             {
                 "name": f"{(pk.get('metadata') or {}).get('first_name', '')} "
@@ -930,6 +942,18 @@ if mode == "Draft":
         gap_note = "in the next round (draft order not published yet)"
         panel_gap = num_teams
 
+    # Opponent needs: the teams picking in a window scale each position's hazard
+    draft_meta = (st.session_state.draft_info or {}).get("draft_meta")
+    pick_positions = (st.session_state.draft_info or {}).get("pick_positions") or []
+    _demand_cache = {}
+
+    def demand(gap):
+        if not draft_meta:
+            return {}
+        if gap not in _demand_cache:
+            _demand_cache[gap] = demand_multipliers(draft_meta, pick_positions, starters, picks_made, gap)
+        return _demand_cache[gap]
+
     # ---- Status strip: draft position on the left, Sleeper sync controls on the right ----
     if league and league.get("draft_id"):
         if compact:
@@ -1003,6 +1027,7 @@ if mode == "Draft":
         picks_made=picks_made,
         gap=horizon,
         reach_gap=reach,
+        demand=demand,
     )
     tier_left = Counter((p["position"], p.get("tier")) for p in available)
     pick = shortlist[0]["player"] if shortlist else None
@@ -1098,8 +1123,21 @@ if mode == "Draft":
     with wait_box:
         waiting = cost_of_waiting(
             available, ["QB", "RB", "WR", "TE"], picks_made,
-            horizon if horizon is not None else num_teams, reach_gap=reach,
+            horizon if horizon is not None else num_teams, reach_gap=reach, demand=demand,
         )
+        needs_ahead = demand(panel_gap)
+        if needs_ahead:
+            def need_word(m):
+                return "hungry" if m >= 1.3 else ("full" if m <= 0.7 else "average")
+            st.markdown(
+                "<span class='rank-num'>Teams picking before your turn, vs league average: </span>"
+                + " ".join(
+                    f"<span class='chip'>{pos} <span style='color:{'#fb923c' if m >= 1.3 else ('#34d399' if m <= 0.7 else '#9aa4b2')}'>"
+                    f"{m:.1f}× {need_word(m)}</span></span>"
+                    for pos, m in needs_ahead.items() if pos not in ("K", "DEF")
+                ),
+                unsafe_allow_html=True,
+            )
         wcols = st.columns(2) * 2 if compact else st.columns(4)
         for col, pos in zip(wcols, ["QB", "RB", "WR", "TE"]):
             row = waiting.get(pos)
@@ -1119,11 +1157,11 @@ if mode == "Draft":
             )
 
         # ---- Likely gone ----
-        gone = [p for p in likely_gone(available, picks_made, panel_gap, limit=7) if p is not pick][:6]
+        gone = [p for p in likely_gone(available, picks_made, panel_gap, limit=7, demand=demand) if p is not pick][:6]
         if gone:
             chips = "".join(
                 f"<span class='chip'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · "
-                f"ADP {p['adp']:.0f} · {survival_for(p, picks_made, panel_gap):.0%} back</span></span>"
+                f"ADP {p['adp']:.0f} · {survival_for(p, picks_made, panel_gap, demand):.0%} back</span></span>"
                 for p in gone
             )
             st.markdown(
@@ -1368,7 +1406,7 @@ if mode == "Draft":
         # Cell 2: value and odds on line 1, bye and market ranks on line 2
         survive = ""
         if p.get("adp") and p["position"] not in LATE_ONLY_POSITIONS:
-            odds = survival_for(p, picks_made, panel_gap)
+            odds = survival_for(p, picks_made, panel_gap, demand)
             color = "#f87171" if odds < 0.35 else ("#fbbf24" if odds < 0.65 else "#9aa4b2")
             survive = (
                 f" <span style='color:{color};font-size:0.75rem;white-space:nowrap' "

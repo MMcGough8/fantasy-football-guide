@@ -42,11 +42,13 @@ def _normal_tail(z):
     return 0.5 * math.erfc(z / math.sqrt(2))
 
 
-def survival_probability(adp, picks_made, gap, sd=None):
+def survival_probability(adp, picks_made, gap, sd=None, hazard=1.0):
     """P(player is still available after `gap` more picks | available now).
 
     Draft slot is modelled as normal around ADP with spread `sd` (default from
-    ADP). No ADP means the market does not expect him to be drafted, so he is
+    ADP). `hazard` scales the chance of being taken over the window (1.0 =
+    market average; 2.0 = the teams ahead want this position twice as much).
+    No ADP means the market does not expect him to be drafted, so he is
     treated as safe.
     """
     if not adp or gap <= 0:
@@ -56,7 +58,8 @@ def survival_probability(adp, picks_made, gap, sd=None):
     now, later = picks_made, picks_made + gap
     alive_now = max(_normal_tail((now - adp) / sd), 1e-6)
     alive_later = _normal_tail((later - adp) / sd)
-    return max(0.0, min(1.0, alive_later / alive_now))
+    survival = max(0.0, min(1.0, alive_later / alive_now))
+    return survival ** hazard if hazard != 1.0 else survival
 
 
 def player_sd(p):
@@ -67,11 +70,16 @@ def player_sd(p):
     return None
 
 
-def survival_for(p, picks_made, gap):
-    return survival_probability(p.get("adp"), picks_made, gap, sd=player_sd(p))
+def survival_for(p, picks_made, gap, demand=None):
+    """Survival odds for a player dict. `demand(gap) -> {position: hazard multiplier}`
+    folds in what the teams picking in that window actually need."""
+    hazard = 1.0
+    if demand is not None and p.get("position"):
+        hazard = (demand(gap) or {}).get(p["position"], 1.0)
+    return survival_probability(p.get("adp"), picks_made, gap, sd=player_sd(p), hazard=hazard)
 
 
-def expected_best_vor(pool, position, picks_made, gap, exclude=None):
+def expected_best_vor(pool, position, picks_made, gap, exclude=None, demand=None):
     """Expected VOR of the best player still there after `gap` picks.
 
     `position` restricts the pool; None means any non-K/DEF position, i.e. the
@@ -91,7 +99,7 @@ def expected_best_vor(pool, position, picks_made, gap, exclude=None):
     for p in players:
         if not p.get("adp"):
             continue  # no market read; do not let him pin the expectation as a sure thing
-        alive = survival_for(p, picks_made, gap)
+        alive = survival_for(p, picks_made, gap, demand)
         expected += p["vor"] * alive * all_better_gone
         all_better_gone *= 1.0 - alive
         if all_better_gone < 1e-4:
@@ -99,25 +107,25 @@ def expected_best_vor(pool, position, picks_made, gap, exclude=None):
     return expected
 
 
-def likely_gone(available, picks_made, gap, limit=6):
+def likely_gone(available, picks_made, gap, limit=6, demand=None):
     """Players the market expects to be taken before your next turn, best first."""
     gone = [
         p for p in available
         if p.get("adp") and not is_unavailable(p)
-        and survival_for(p, picks_made, gap) < LIKELY_GONE_THRESHOLD
+        and survival_for(p, picks_made, gap, demand) < LIKELY_GONE_THRESHOLD
     ]
     gone.sort(key=lambda p: p["adp"])
     return gone[:limit]
 
 
-def reaches_me(p, picks_made, reach_gap):
+def reaches_me(p, picks_made, reach_gap, demand=None):
     """Could this player still be there when I am next on the clock?"""
     if not reach_gap:
         return True
-    return survival_for(p, picks_made, reach_gap) >= MIN_REACH_PROBABILITY
+    return survival_for(p, picks_made, reach_gap, demand) >= MIN_REACH_PROBABILITY
 
 
-def cost_of_waiting(available, positions, picks_made, gap, reach_gap=0):
+def cost_of_waiting(available, positions, picks_made, gap, reach_gap=0, demand=None):
     """For each position: best I can expect at my next turn vs the turn after.
 
     `reach_gap` is other teams' picks before my next turn (0 when on the clock);
@@ -128,7 +136,7 @@ def cost_of_waiting(available, positions, picks_made, gap, reach_gap=0):
     for pos in positions:
         candidates = [
             p for p in available
-            if p["position"] == pos and not is_unavailable(p) and reaches_me(p, picks_made, reach_gap)
+            if p["position"] == pos and not is_unavailable(p) and reaches_me(p, picks_made, reach_gap, demand)
         ]
         if not candidates:
             continue
@@ -137,7 +145,7 @@ def cost_of_waiting(available, positions, picks_made, gap, reach_gap=0):
             # Back-to-back picks: nobody can take him before you pick again
             later = best["vor"]
         else:
-            later = expected_best_vor(available, pos, at_my_pick, gap, exclude=best)
+            later = expected_best_vor(available, pos, at_my_pick, gap, exclude=best, demand=demand)
         table[pos] = {"now": best, "later": round(later, 1), "cost": round(best["vor"] - later, 1)}
     return table
 
@@ -156,7 +164,7 @@ SHORTLIST = 4
 
 def rank_candidates(
     available, needs, roster_size, total_picks, roster_counts=None,
-    picks_made=None, gap=None, reach_gap=0, limit=SHORTLIST,
+    picks_made=None, gap=None, reach_gap=0, limit=SHORTLIST, demand=None,
 ):
     """Scored shortlist, best first. Each entry: player, adjusted, vor, lookahead,
     fills_need, reach (odds he reaches my pick), back (odds he is still there the
@@ -199,7 +207,7 @@ def rank_candidates(
             return False
         if counts.get(pos, 0) >= POSITION_CAPS.get(pos, 99):
             return False
-        return not use_market or reaches_me(p, picks_made, reach_gap)
+        return not use_market or reaches_me(p, picks_made, reach_gap, demand)
 
     candidates = [p for p in available if is_candidate(p)]
     if not candidates:
@@ -216,7 +224,7 @@ def rank_candidates(
 
     def score(p):
         market = use_market and p["position"] not in LATE_ONLY_POSITIONS
-        lookahead = expected_best_vor(available, None, at_my_pick, gap, exclude=p) if market else 0.0
+        lookahead = expected_best_vor(available, None, at_my_pick, gap, exclude=p, demand=demand) if market else 0.0
         need = fills_need(p["position"], needs)
         bonus = 0.0
         if need:
@@ -227,9 +235,9 @@ def rank_candidates(
             "lookahead": round(lookahead, 1),
             "fills_need": need,
             "adjusted": round(p["vor"] + lookahead + bonus, 1),
-            "reach": survival_for(p, picks_made or 0, reach_gap) if market else 1.0,
-            "back": survival_for(p, at_my_pick, gap) if market else 1.0,
-            "later": round(expected_best_vor(available, p["position"], at_my_pick, gap, exclude=p), 1)
+            "reach": survival_for(p, picks_made or 0, reach_gap, demand) if market else 1.0,
+            "back": survival_for(p, at_my_pick, gap, demand) if market else 1.0,
+            "later": round(expected_best_vor(available, p["position"], at_my_pick, gap, exclude=p, demand=demand), 1)
             if market else None,
             "mode": mode,
         }
@@ -240,11 +248,12 @@ def rank_candidates(
 
 def recommend_pick(
     available, needs, roster_size, total_picks, roster_counts=None,
-    picks_made=None, gap=None, reach_gap=0,
+    picks_made=None, gap=None, reach_gap=0, demand=None,
 ):
     """Return (player, reason): the top of `rank_candidates` with a one-line why."""
     ranked = rank_candidates(
-        available, needs, roster_size, total_picks, roster_counts, picks_made, gap, reach_gap, limit=1
+        available, needs, roster_size, total_picks, roster_counts, picks_made, gap, reach_gap,
+        limit=1, demand=demand,
     )
     if not ranked:
         return None, ""

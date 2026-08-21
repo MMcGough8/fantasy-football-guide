@@ -132,3 +132,28 @@ def test_survival_uses_the_expert_rank_spread_when_present():
     # A contested player has fatter tails: more likely to slip to me than a settled one
     assert survival_for(contested, picks_made=18, gap=12) > survival_for(settled, picks_made=18, gap=12)
     assert 0 < survival_for(plain, picks_made=18, gap=12) < 1
+
+
+def test_demand_multiplier_scales_the_hazard():
+    from recommend import survival_for
+
+    p = {"adp": 30}
+    base = survival_for(p, picks_made=18, gap=12)
+    hungrier = survival_for(p, picks_made=18, gap=12, demand=lambda gap: {"RB": 2.0})
+    full = survival_for(p, picks_made=18, gap=12, demand=lambda gap: {"RB": 0.5})
+    # p has no position; multipliers apply per position
+    assert hungrier == base == full
+    rb = {"adp": 30, "position": "RB"}
+    assert survival_for(rb, 18, 12, demand=lambda gap: {"RB": 2.0}) < survival_for(rb, 18, 12)
+    assert survival_for(rb, 18, 12, demand=lambda gap: {"RB": 0.5}) > survival_for(rb, 18, 12)
+
+
+def test_recommendation_reacts_to_opponent_needs():
+    available = [_p("RB A", "RB", 60, 20), _p("WR A", "WR", 58, 20)]
+    # Neutral market: the RB edges it
+    pick, _ = recommend_pick(available, {"RB": 1, "WR": 1}, 2, 14, picks_made=10, gap=12, reach_gap=0)
+    assert pick["name"] == "RB A"
+    # The teams picking next are RB-full and WR-hungry: the RB will come back, the WR will not
+    demand = lambda gap: {"RB": 0.3, "WR": 2.5}
+    pick, _ = recommend_pick(available, {"RB": 1, "WR": 1}, 2, 14, picks_made=10, gap=12, reach_gap=0, demand=demand)
+    assert pick["name"] == "WR A"
