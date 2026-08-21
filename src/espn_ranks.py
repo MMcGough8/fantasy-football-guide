@@ -51,15 +51,17 @@ def load_berry_ranks():
     return _berry_cache
 
 
-def attach_ranks(board, live_espn_ranks=None):
-    """Attach ESPN + Berry ranks, a three-source consensus, and disagreement flags.
+def attach_ranks(board, live_espn_ranks=None, fp_ranks=None):
+    """Attach ESPN, Berry and FantasyPros ranks, a market consensus, and disagreement flags.
 
     `live_espn_ranks` ({match_key: rank} from ESPN's API) wins over the committed
-    espn_rankings.json snapshot when present.
+    espn_rankings.json snapshot when present. `fp_ranks` is {match_key: {rank, std,
+    tier, ...}} from FantasyPros' expert consensus.
     """
     espn = load_espn_ranks()
     berry = load_berry_ranks()
     live = live_espn_ranks or {}
+    fp = fp_ranks or {}
 
     # Sleeper rank = each player's VOR order on the board
     by_vor = sorted(board, key=lambda p: p.get("vor", 0), reverse=True)
@@ -70,16 +72,17 @@ def attach_ranks(board, live_espn_ranks=None):
         key = match_key(p["name"], p["position"])
         p["espn_rank"] = live.get(key, espn.get(key))
         p["berry_rank"] = berry.get(key)
+        fp_entry = fp.get(key) or {}
+        p["fp_rank"] = fp_entry.get("rank")
+        p["fp_rank_std"] = fp_entry.get("std")
+        p["fp_tier"] = fp_entry.get("tier")
 
-        # Consensus = average of whatever sources are available for this player
-        ranks = [p["sleeper_rank"]]
-        if p["espn_rank"] is not None:
-            ranks.append(p["espn_rank"])
-        if p["berry_rank"] is not None:
-            ranks.append(p["berry_rank"])
-        p["consensus"] = round(sum(ranks) / len(ranks), 1)
+        # Consensus = the market's view (experts and sites), not the board's own order
+        market = [r for r in (p["fp_rank"], p["espn_rank"], p["berry_rank"]) if r is not None]
+        p["consensus"] = round(sum(market) / len(market), 1) if market else p["sleeper_rank"]
 
-        # Disagreement = the spread between the highest and lowest ranking
+        # Disagreement = how far the board's order sits from any market rank
+        ranks = [p["sleeper_rank"]] + market
         p["rank_spread"] = max(ranks) - min(ranks)
         p["disagreement"] = p["rank_spread"] >= 15
     return board

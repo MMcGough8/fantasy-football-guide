@@ -83,6 +83,45 @@ def fetch_projections(position, season, api_key):
     }
 
 
+def scoring_code_for(scoring_settings):
+    """FantasyPros scoring code closest to the league's reception value."""
+    rec = (scoring_settings or {}).get("rec", 1.0) or 0
+    if rec >= 0.75:
+        return "PPR"
+    return "HALF" if rec >= 0.25 else "STD"
+
+
+def fetch_consensus_rankings(season, api_key, scoring="HALF"):
+    """Expert-consensus draft rankings: {match_key: {rank, std, tier, min, max}}.
+
+    rank_std is the spread of the experts' ranks for the player, a measured
+    stand-in for how contested his draft slot is.
+    """
+    if not api_key:
+        raise FantasyProsError("FANTASYPROS_API_KEY is not set")
+    params = {"type": "draft", "scoring": scoring, "position": "ALL", "week": PRESEASON_WEEK, "experts": "available"}
+    payload = _get_with_retry(f"{BASE_URL}/nfl/{season}/consensus-rankings", api_key, params)
+    players = payload.get("players") if isinstance(payload, dict) else None
+    if players is None:
+        raise FantasyProsError("FantasyPros rankings response had no players")
+    ranks = {}
+    for p in players:
+        name, pos = p.get("player_name"), p.get("player_position_id")
+        if not name or pos is None:
+            continue
+        try:
+            ranks[match_key(name, pos)] = {
+                "rank": int(p["rank_ecr"]),
+                "std": float(p.get("rank_std") or 0),
+                "tier": int(p["tier"]) if p.get("tier") is not None else None,
+                "min": int(p["rank_min"]) if p.get("rank_min") is not None else None,
+                "max": int(p["rank_max"]) if p.get("rank_max") is not None else None,
+            }
+        except (TypeError, ValueError):
+            continue
+    return ranks
+
+
 def fetch_all(season, api_key):
     """Return {"projections": {position: {match_key: stats}}, "missing": [positions]}.
 

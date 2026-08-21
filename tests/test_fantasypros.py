@@ -127,3 +127,38 @@ def test_fetch_all_raises_when_nothing_answered(monkeypatch):
     monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
     with pytest.raises(FantasyProsError):
         fetch_all("2026", "test-key")
+
+
+@pytest.fixture
+def fp_rankings():
+    from conftest import load_fixture
+
+    return load_fixture("fantasypros_rankings_sample.json")
+
+
+def test_consensus_rankings_parse_and_key_by_match_key(monkeypatch, fp_rankings):
+    from fantasypros import fetch_consensus_rankings
+
+    seen = {}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        seen.update(params)
+        return FakeResponse(fp_rankings)
+
+    monkeypatch.setattr(fantasypros.requests, "get", fake_get)
+    ranks = fetch_consensus_rankings("2026", "test-key", scoring="HALF")
+    assert seen["scoring"] == "HALF" and seen["type"] == "draft" and seen["week"] == 0
+    gibbs = ranks[match_key("Jahmyr Gibbs", "RB")]
+    assert gibbs == {"rank": 1, "std": 0.75, "tier": 1, "min": 1, "max": 5}
+    # defenses join on nickname like every other feed
+    dst = next(k for k in ranks if k in (match_key("Houston Texans", "DEF"), match_key("Denver Broncos", "DEF"), match_key("Philadelphia Eagles", "DEF"), match_key("Baltimore Ravens", "DEF"), match_key("Minnesota Vikings", "DEF"), match_key("Pittsburgh Steelers", "DEF")))
+    assert ranks[dst]["rank"] > 50
+
+
+def test_scoring_code_follows_reception_value():
+    from fantasypros import scoring_code_for
+
+    assert scoring_code_for({"rec": 1.0}) == "PPR"
+    assert scoring_code_for({"rec": 0.4}) == "HALF"
+    assert scoring_code_for({"rec": 0.0}) == "STD"
+    assert scoring_code_for(None) == "PPR"

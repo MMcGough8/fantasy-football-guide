@@ -133,3 +133,27 @@ def test_berry_ranks_match_defenses_by_nickname(monkeypatch):
     assert board[0]["espn_rank"] == 140
     monkeypatch.setattr(espn_ranks, "_berry_cache", None)
     monkeypatch.setattr(espn_ranks, "_espn_cache", None)
+
+
+def test_fp_ranks_join_and_drive_consensus(monkeypatch):
+    import espn_ranks
+
+    monkeypatch.setattr(espn_ranks, "_berry_cache", None)
+    monkeypatch.setattr(espn_ranks, "_espn_cache", None)
+    monkeypatch.setattr(espn_ranks, "_load", lambda name: [])
+    board = [
+        {"name": "Jahmyr Gibbs", "position": "RB", "vor": 100},
+        {"name": "Puka Nacua", "position": "WR", "vor": 90},
+    ]
+    fp = {match_key("Jahmyr Gibbs", "RB"): {"rank": 1, "std": 0.75, "tier": 1, "min": 1, "max": 5},
+          match_key("Puka Nacua", "WR"): {"rank": 4, "std": 1.4, "tier": 1, "min": 2, "max": 9}}
+    espn_ranks.attach_ranks(board, live_espn_ranks={match_key("Puka Nacua", "WR"): 30}, fp_ranks=fp)
+    gibbs, puka = board
+    assert gibbs["fp_rank"] == 1 and gibbs["fp_rank_std"] == 0.75 and gibbs["fp_tier"] == 1
+    # consensus is the market view (FP + ESPN + Berry); the board's own order is not a vote
+    assert gibbs["consensus"] == 1
+    assert puka["consensus"] == 17  # mean of FP 4 and ESPN 30
+    # spread still measures board order vs every market rank
+    assert puka["rank_spread"] == 28 and puka["disagreement"] is True
+    monkeypatch.setattr(espn_ranks, "_berry_cache", None)
+    monkeypatch.setattr(espn_ranks, "_espn_cache", None)

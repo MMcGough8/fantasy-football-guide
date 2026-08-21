@@ -10,6 +10,10 @@ from roster_slots import FLEX_ELIGIBILITY
 # too optimistic in the middle rounds.
 ADP_SD_SCALE = 2.2
 ADP_SD_FLOOR = 4.0
+# When FantasyPros' expert rank spread is known it replaces the formula: measured
+# ADP dispersion ran about 1.0x the expert spread through round 4 and ~1.4x later.
+FP_STD_SCALE = 1.2
+FP_STD_FLOOR = 2.0
 LIKELY_GONE_THRESHOLD = 0.5
 MARKET_CANDIDATES = 40
 MIN_REACH_PROBABILITY = 0.25  # between turns, only players this likely to reach me count
@@ -38,19 +42,33 @@ def _normal_tail(z):
     return 0.5 * math.erfc(z / math.sqrt(2))
 
 
-def survival_probability(adp, picks_made, gap):
+def survival_probability(adp, picks_made, gap, sd=None):
     """P(player is still available after `gap` more picks | available now).
 
-    Draft slot is modelled as normal around ADP. No ADP means the market does
-    not expect him to be drafted, so he is treated as safe.
+    Draft slot is modelled as normal around ADP with spread `sd` (default from
+    ADP). No ADP means the market does not expect him to be drafted, so he is
+    treated as safe.
     """
     if not adp or gap <= 0:
         return 1.0
-    sd = max(ADP_SD_FLOOR, ADP_SD_SCALE * math.sqrt(adp))
+    if sd is None:
+        sd = max(ADP_SD_FLOOR, ADP_SD_SCALE * math.sqrt(adp))
     now, later = picks_made, picks_made + gap
     alive_now = max(_normal_tail((now - adp) / sd), 1e-6)
     alive_later = _normal_tail((later - adp) / sd)
     return max(0.0, min(1.0, alive_later / alive_now))
+
+
+def player_sd(p):
+    """Spread of a player's draft slot: the experts' rank spread if known, else from ADP."""
+    std = p.get("fp_rank_std")
+    if std:
+        return max(FP_STD_FLOOR, FP_STD_SCALE * std)
+    return None
+
+
+def survival_for(p, picks_made, gap):
+    return survival_probability(p.get("adp"), picks_made, gap, sd=player_sd(p))
 
 
 def expected_best_vor(pool, position, picks_made, gap, exclude=None):
@@ -73,7 +91,7 @@ def expected_best_vor(pool, position, picks_made, gap, exclude=None):
     for p in players:
         if not p.get("adp"):
             continue  # no market read; do not let him pin the expectation as a sure thing
-        alive = survival_probability(p.get("adp"), picks_made, gap)
+        alive = survival_for(p, picks_made, gap)
         expected += p["vor"] * alive * all_better_gone
         all_better_gone *= 1.0 - alive
         if all_better_gone < 1e-4:
@@ -86,7 +104,7 @@ def likely_gone(available, picks_made, gap, limit=6):
     gone = [
         p for p in available
         if p.get("adp") and not is_unavailable(p)
-        and survival_probability(p["adp"], picks_made, gap) < LIKELY_GONE_THRESHOLD
+        and survival_for(p, picks_made, gap) < LIKELY_GONE_THRESHOLD
     ]
     gone.sort(key=lambda p: p["adp"])
     return gone[:limit]
@@ -96,7 +114,7 @@ def reaches_me(p, picks_made, reach_gap):
     """Could this player still be there when I am next on the clock?"""
     if not reach_gap:
         return True
-    return survival_probability(p.get("adp"), picks_made, reach_gap) >= MIN_REACH_PROBABILITY
+    return survival_for(p, picks_made, reach_gap) >= MIN_REACH_PROBABILITY
 
 
 def cost_of_waiting(available, positions, picks_made, gap, reach_gap=0):
@@ -209,8 +227,8 @@ def rank_candidates(
             "lookahead": round(lookahead, 1),
             "fills_need": need,
             "adjusted": round(p["vor"] + lookahead + bonus, 1),
-            "reach": survival_probability(p.get("adp"), picks_made or 0, reach_gap) if market else 1.0,
-            "back": survival_probability(p.get("adp"), at_my_pick, gap) if market else 1.0,
+            "reach": survival_for(p, picks_made or 0, reach_gap) if market else 1.0,
+            "back": survival_for(p, at_my_pick, gap) if market else 1.0,
             "later": round(expected_best_vor(available, p["position"], at_my_pick, gap, exclude=p), 1)
             if market else None,
             "mode": mode,

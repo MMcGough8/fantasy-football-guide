@@ -121,3 +121,14 @@ def test_cost_of_waiting_is_zero_when_you_pick_again_immediately():
     table = cost_of_waiting(available, ["RB"], picks_made=11, gap=0)
     assert table["RB"]["cost"] == 0
     assert table["RB"]["later"] == 45
+
+
+def test_survival_uses_the_expert_rank_spread_when_present():
+    from recommend import survival_for
+
+    contested = {"adp": 30, "fp_rank_std": 12.0}
+    settled = {"adp": 30, "fp_rank_std": 2.0}
+    plain = {"adp": 30}
+    # A contested player has fatter tails: more likely to slip to me than a settled one
+    assert survival_for(contested, picks_made=18, gap=12) > survival_for(settled, picks_made=18, gap=12)
+    assert 0 < survival_for(plain, picks_made=18, gap=12) < 1

@@ -19,7 +19,7 @@ from recommend import (
     is_unavailable,
     likely_gone,
     rank_candidates,
-    survival_probability,
+    survival_for,
 )
 from pick_sync import apply_picks, index_board_by_player_id, next_pick_info
 from espn_ranks import match_key
@@ -180,11 +180,18 @@ DEGRADED_RETRY_SECONDS = 300
 
 
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading FantasyPros consensus...")
-def load_fantasypros(season, retry_bucket):
+def load_fantasypros(season, retry_bucket, scoring_code):
+    key = os.getenv("FANTASYPROS_API_KEY", "").strip()
     try:
-        return {"ok": True, "data": fantasypros.fetch_all(season, os.getenv("FANTASYPROS_API_KEY", "").strip())}
+        data = fantasypros.fetch_all(season, key)
     except FantasyProsError as e:
         return {"ok": False, "error": str(e)}
+    try:
+        data["rankings"] = fantasypros.fetch_consensus_rankings(season, key, scoring=scoring_code)
+    except FantasyProsError as e:
+        data["rankings"] = None
+        data["missing"] = list(data["missing"]) + [f"rankings ({e})"]
+    return {"ok": True, "data": data}
 
 
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading ESPN projections...")
@@ -207,11 +214,12 @@ def load_board(scoring, num_teams, scoring_items, starters_items, use_fantasypro
     """Returns (board, projection_note, degraded). Dicts arrive as sorted tuples so the
     cache can hash them; `retry_bucket` only changes while a feed is missing."""
     scoring_settings = dict(scoring_items) if scoring_items else None
-    extra, live_ranks, problems = {}, None, []
+    extra, live_ranks, fp_ranks, problems = {}, None, None, []
     if use_fantasypros:
-        fp = load_fantasypros(SEASON, retry_bucket)
+        fp = load_fantasypros(SEASON, retry_bucket, fantasypros.scoring_code_for(scoring_settings))
         if fp["ok"]:
             extra["fp"] = fp["data"]["projections"]
+            fp_ranks = fp["data"].get("rankings")
             if fp["data"]["missing"]:
                 problems.append(f"FantasyPros missing {'/'.join(fp['data']['missing'])}")
         else:
@@ -232,10 +240,12 @@ def load_board(scoring, num_teams, scoring_items, starters_items, use_fantasypro
     note = " + ".join(names) + how
     if live_ranks:
         note += ". ESPN ranks are live"
+    if fp_ranks:
+        note += f"; FantasyPros consensus ranks ({len(fp_ranks)} players, {fantasypros.scoring_code_for(scoring_settings)})"
     if problems:
         note += ". " + "; ".join(problems)
     board = build_board(
-        scoring, num_teams, scoring_settings, dict(starters_items), extra or None, live_ranks
+        scoring, num_teams, scoring_settings, dict(starters_items), extra or None, live_ranks, fp_ranks
     )
     return board, note, bool(problems)
 
@@ -1065,7 +1075,7 @@ if mode == "Draft":
         if gone:
             chips = "".join(
                 f"<span class='chip'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · "
-                f"ADP {p['adp']:.0f} · {survival_probability(p['adp'], picks_made, panel_gap):.0%} back</span></span>"
+                f"ADP {p['adp']:.0f} · {survival_for(p, picks_made, panel_gap):.0%} back</span></span>"
                 for p in gone
             )
             st.markdown(
@@ -1179,7 +1189,7 @@ if mode == "Draft":
             on_click=lambda pos=pos: st.session_state.update(pos_filter=pos),
         )
 
-    sort_options = ["VOR", "Consensus", "ESPN", "Berry"]
+    sort_options = ["VOR", "Consensus", "FP", "ESPN", "Berry"]
     ctl_left, ctl_right = st.columns([2, 3], vertical_alignment="center")
     sort_by = ctl_right.radio(
         "Sort by",
@@ -1205,6 +1215,8 @@ if mode == "Draft":
         shown.sort(key=lambda p: p.get("vor", 0), reverse=True)
     elif sort_by == "Consensus":
         shown.sort(key=lambda p: p.get("consensus") or 9999)
+    elif sort_by == "FP":
+        shown.sort(key=lambda p: p.get("fp_rank") or 9999)
     elif sort_by == "ESPN":
         shown.sort(key=lambda p: p.get("espn_rank") or 9999)
     elif sort_by == "Berry":
@@ -1308,7 +1320,7 @@ if mode == "Draft":
         # Cell 2: value and odds on line 1, bye and market ranks on line 2
         survive = ""
         if p.get("adp") and p["position"] not in LATE_ONLY_POSITIONS:
-            odds = survival_probability(p["adp"], picks_made, panel_gap)
+            odds = survival_for(p, picks_made, panel_gap)
             color = "#f87171" if odds < 0.35 else ("#fbbf24" if odds < 0.65 else "#9aa4b2")
             survive = (
                 f" <span style='color:{color};font-size:0.75rem;white-space:nowrap' "
@@ -1327,6 +1339,8 @@ if mode == "Draft":
             detail.append(f"Bye {p['bye']}")
         if sort_by != "VOR" and p.get("sleeper_rank"):
             detail.append(f"Board #{p['sleeper_rank']}")
+        if p.get("fp_rank"):
+            detail.append(f"FP {p['fp_rank']}")
         if p.get("espn_rank"):
             detail.append(f"ESPN {p['espn_rank']}")
         if p.get("berry_rank"):

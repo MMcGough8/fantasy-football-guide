@@ -213,6 +213,7 @@ def build_board(
     starters=None,
     extra_projections=None,
     live_espn_ranks=None,
+    fp_ranks=None,
 ):
     """`extra_projections` is {source_name: {position: {match_key: stats}}}."""
     ranks = replacement_ranks(num_teams, starters)
@@ -245,7 +246,7 @@ def build_board(
     for p in board[GLOBAL_POOL:]:
         p["global_tier"] = trailing
 
-    return attach_espn_ranks(board, live_espn_ranks)
+    return attach_espn_ranks(board, live_espn_ranks, fp_ranks)
 
 
 if __name__ == "__main__":
