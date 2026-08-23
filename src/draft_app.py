@@ -1098,13 +1098,13 @@ if mode == "Draft":
         proj = f"PROJ {pick['points']}" + (source_txt(pick) if sources_disagree(pick) else "")
         bye = f" · Bye {pick['bye']}" if pick.get("bye") else ""
         line1 = f"{why} · VOR {pick['vor']} · {proj}{bye}"
-        if top["mode"] == "now":
-            line2 = (
-                f"Won't wait: {top['back']:.0%} to still be there next turn · "
-                f"best {pos} then ≈ {top['later']:.0f} VOR"
-            )
+        later_txt = f" · best {pos} then ≈ {top['later']:.0f} VOR" if top["later"] is not None else ""
+        if top["mode"] == "now" and pos in LATE_ONLY_POSITIONS:
+            line2 = "Last rounds: fill the open slot now."
+        elif top["mode"] == "now":
+            line2 = f"Won't wait: {top['back']:.0%} to still be there next turn{later_txt}"
         elif top["mode"] == "reach":
-            line2 = f"If he's gone when you're up: best {pos} then ≈ {top['later']:.0f} VOR"
+            line2 = f"If he's gone when you're up{later_txt}" if later_txt else "Fills an open slot in the final rounds."
         else:
             line2 = "Draft order not published yet: ranking by value and need only."
 
