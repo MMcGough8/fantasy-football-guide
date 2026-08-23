@@ -174,3 +174,12 @@ def test_headline_gate_is_stricter_than_the_candidate_gate():
     strict = rank_candidates(available, {"WR": 2}, 1, 14, picks_made=18, gap=18, reach_gap=6, limit=1, min_reach=HEADLINE_REACH)
     assert loose[0]["player"]["name"] == "Coin flip"
     assert strict[0]["player"]["name"] == "Safe"
+
+
+def test_two_open_slots_at_a_position_outweigh_one():
+    from recommend import rank_candidates
+
+    # TE (one slot open) vs WR (two slots open), equal VOR: the WR is more urgent
+    available = [_p("TE A", "TE", 40), _p("WR A", "WR", 40)]
+    top = rank_candidates(available, {"TE": 1, "WR": 2}, 3, TOTAL_PICKS, limit=1)[0]
+    assert top["player"]["name"] == "WR A"

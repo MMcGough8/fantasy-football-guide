@@ -25,6 +25,10 @@ NEED_BONUS = 30.0  # added to VOR when the player fills an open dedicated slot (
 # Filling only the FLEX is worth less than filling a slot only this position can fill:
 # a third RB into the FLEX leaves WR2 open, and only a WR can close that.
 FLEX_NEED_BONUS = 15.0
+# Extra bonus per additional open dedicated slot at the position: two WR slots open
+# is more urgent than one TE slot. Simulated cost ~3 lineup points of ~1,930 (noise)
+# for the second WR arriving about half a round earlier.
+NEED_BONUS_PER_EXTRA_SLOT = 15.0
 LATE_NEED_BONUS = 100.0  # K/DEF still open inside the final picks: take one
 LATE_ROUND_WINDOW = 3  # K and DEF are only considered within this many picks of the end
 LATE_ONLY_POSITIONS = ("K", "DEF")
@@ -259,7 +263,11 @@ def rank_candidates(
         need = kind is not None
         bonus = 0.0
         if kind == "slot":
-            bonus = LATE_NEED_BONUS if p["position"] in LATE_ONLY_POSITIONS else NEED_BONUS
+            if p["position"] in LATE_ONLY_POSITIONS:
+                bonus = LATE_NEED_BONUS
+            else:
+                extra = max(0, needs.get(p["position"], 0) - 1)
+                bonus = NEED_BONUS + NEED_BONUS_PER_EXTRA_SLOT * extra
         elif kind == "flex":
             bonus = FLEX_NEED_BONUS
         return {

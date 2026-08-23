@@ -46,7 +46,7 @@ SEASON = "2026"
 SYNC_INTERVAL = "15s"  # auto-sync polling before the draft starts
 SYNC_INTERVAL_DRAFTING = "5s"  # while picks are being made
 COMPACT_BELOW_PX = 1100  # browser width under which the compact layout switches on by itself
-SYNC_INTERVAL_NEAR_TURN = "3s"  # within NEAR_TURN_PICKS of my turn, poll faster
+SYNC_INTERVAL_NEAR_TURN = "2s"  # within NEAR_TURN_PICKS of my turn, poll faster
 NEAR_TURN_PICKS = 2
 FEED_CACHE_SECONDS = 1800  # projections refresh twice an hour; a rebuild takes ~4 s
 SYNC_STALE_SECONDS = 45  # heartbeat turns orange when the last sync is older than this
@@ -1131,8 +1131,9 @@ if mode == "Draft":
                 b = best_now[0]
                 odds = survival_for(b["player"], picks_made, reach, demand)
                 line2 += (
-                    f"<br>Best on the board right now: <span style='color:#ffffff'>{b['player']['name']}</span> "
-                    f"({b['player']['position']}, VOR {b['vor']:.0f}) · {odds:.0%} to reach you"
+                    f"<br><span style='color:#ffffff;font-weight:600'>If {b['player']['name']} "
+                    f"({b['player']['position']}, VOR {b['vor']:.0f}) is still there, take him</span> "
+                    f"<span class='rank-num'>· {odds:.0%} chance he reaches you</span>"
                 )
         else:
             line2 = "Draft order not published yet: ranking by value and need only."
