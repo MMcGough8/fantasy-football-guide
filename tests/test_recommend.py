@@ -150,3 +150,27 @@ def test_rank_candidates_market_mode_reports_reach_and_mode():
     on_clock = rank_candidates(available, {"WR": 2}, 1, TOTAL_PICKS, picks_made=6, gap=18, reach_gap=0)
     assert on_clock[0]["player"]["name"] == "Star" and on_clock[0]["mode"] == "now"
     assert on_clock[0]["back"] < 0.1
+
+
+def test_held_reason_explains_why_a_better_player_is_skipped():
+    from recommend import held_reason
+
+    counts = {"QB": 1, "TE": 1, "RB": 2, "WR": 2}
+    needs = {"K": 1, "DEF": 1}
+    assert "backup QB" in held_reason(_p("QB B", "QB", 32), counts, roster_size=7, total_picks=14, needs=needs)
+    assert "backup TE" in held_reason(_p("TE B", "TE", 20), counts, roster_size=7, total_picks=14, needs=needs)
+    assert "last 3 picks" in held_reason(_p("DEF A", "DEF", 27), counts, roster_size=7, total_picks=14, needs=needs)
+    assert held_reason(_p("WR C", "WR", 10), counts, roster_size=7, total_picks=14, needs=needs) is None
+    assert "cap" in held_reason(_p("QB C", "QB", 30), {"QB": 2}, roster_size=12, total_picks=14, needs={})
+    assert "IR" in held_reason(dict(_p("RB X", "RB", 50), injury_status="IR"), {}, 0, 14, {"RB": 2})
+
+
+def test_headline_gate_is_stricter_than_the_candidate_gate():
+    from recommend import rank_candidates, HEADLINE_REACH
+
+    assert HEADLINE_REACH > 0.5
+    available = [dict(_p("Coin flip", "WR", 90), adp=20), dict(_p("Safe", "WR", 60), adp=60)]
+    loose = rank_candidates(available, {"WR": 2}, 1, 14, picks_made=18, gap=18, reach_gap=6, limit=1)
+    strict = rank_candidates(available, {"WR": 2}, 1, 14, picks_made=18, gap=18, reach_gap=6, limit=1, min_reach=HEADLINE_REACH)
+    assert loose[0]["player"]["name"] == "Coin flip"
+    assert strict[0]["player"]["name"] == "Safe"

@@ -17,6 +17,9 @@ FP_STD_FLOOR = 2.0
 LIKELY_GONE_THRESHOLD = 0.5
 MARKET_CANDIDATES = 40
 MIN_REACH_PROBABILITY = 0.25  # between turns, only players this likely to reach me count
+# The headline plan between turns uses a stricter gate: in a rehearsal the 25%
+# plan reached the owner 6 of 14 times, the 65% plan 9 of 14.
+HEADLINE_REACH = 0.65
 
 NEED_BONUS = 30.0  # added to VOR when the player fills an open starting slot (swept: 25-35 best)
 LATE_NEED_BONUS = 100.0  # K/DEF still open inside the final picks: take one
@@ -118,11 +121,31 @@ def likely_gone(available, picks_made, gap, limit=6, demand=None):
     return gone[:limit]
 
 
-def reaches_me(p, picks_made, reach_gap, demand=None):
+def reaches_me(p, picks_made, reach_gap, demand=None, min_reach=None):
     """Could this player still be there when I am next on the clock?"""
     if not reach_gap:
         return True
-    return survival_for(p, picks_made, reach_gap, demand) >= MIN_REACH_PROBABILITY
+    threshold = MIN_REACH_PROBABILITY if min_reach is None else min_reach
+    return survival_for(p, picks_made, reach_gap, demand) >= threshold
+
+
+def held_reason(p, roster_counts, roster_size, total_picks, needs):
+    """Why the recommender will not take `p` right now, or None if it would consider him."""
+    pos = p["position"]
+    counts = roster_counts or {}
+    if is_unavailable(p):
+        return f"{p.get('injury_status')}: not playing soon"
+    if counts.get(pos, 0) >= POSITION_CAPS.get(pos, 99):
+        return f"at the {pos} cap ({POSITION_CAPS[pos]})"
+    picks_left = total_picks - roster_size
+    if pos in LATE_ONLY_POSITIONS:
+        if picks_left > LATE_ROUND_WINDOW:
+            return f"{pos} waits for the last {LATE_ROUND_WINDOW} picks"
+        if not fills_need(pos, needs):
+            return f"{pos} slot already filled"
+    if pos in ("QB", "TE") and counts.get(pos, 0) >= 1 and roster_size + 1 < SECOND_QB_TE_ROUND:
+        return f"a backup {pos} waits until round {SECOND_QB_TE_ROUND}"
+    return None
 
 
 def cost_of_waiting(available, positions, picks_made, gap, reach_gap=0, demand=None):
@@ -164,7 +187,7 @@ SHORTLIST = 4
 
 def rank_candidates(
     available, needs, roster_size, total_picks, roster_counts=None,
-    picks_made=None, gap=None, reach_gap=0, limit=SHORTLIST, demand=None,
+    picks_made=None, gap=None, reach_gap=0, limit=SHORTLIST, demand=None, min_reach=None,
 ):
     """Scored shortlist, best first. Each entry: player, adjusted, vor, lookahead,
     fills_need, reach (odds he reaches my pick), back (odds he is still there the
@@ -207,7 +230,7 @@ def rank_candidates(
             return False
         if counts.get(pos, 0) >= POSITION_CAPS.get(pos, 99):
             return False
-        return not use_market or reaches_me(p, picks_made, reach_gap, demand)
+        return not use_market or reaches_me(p, picks_made, reach_gap, demand, min_reach)
 
     candidates = [p for p in available if is_candidate(p)]
     if not candidates:

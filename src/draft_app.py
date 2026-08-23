@@ -13,9 +13,11 @@ from categories import sleepers, top_rookies, boom_ceiling, high_floor
 from grader import grade_draft
 from roster_slots import allocate_slots
 from recommend import (
+    HEADLINE_REACH,
     LATE_ONLY_POSITIONS,
     LATE_ROUND_WINDOW,
     cost_of_waiting,
+    held_reason,
     is_unavailable,
     likely_gone,
     rank_candidates,
@@ -41,18 +43,20 @@ LEAGUE_SIZES = [8, 10, 12, 14]
 REQUIRED_LEAGUE_KEYS = ("league_id", "name", "num_teams", "starters", "bench", "scoring_settings", "user_id")
 DEFAULT_BENCH_SPOTS = 8
 SEASON = "2026"
-SYNC_INTERVAL = "15s"  # how often auto-sync polls the Sleeper draft
+SYNC_INTERVAL = "15s"  # auto-sync polling before the draft starts
+SYNC_INTERVAL_DRAFTING = "5s"  # while picks are being made
 COMPACT_BELOW_PX = 1100  # browser width under which the compact layout switches on by itself
-SYNC_INTERVAL_NEAR_TURN = "5s"  # within NEAR_TURN_PICKS of my turn, poll faster
+SYNC_INTERVAL_NEAR_TURN = "3s"  # within NEAR_TURN_PICKS of my turn, poll faster
 NEAR_TURN_PICKS = 2
 FEED_CACHE_SECONDS = 1800  # projections refresh twice an hour; a rebuild takes ~4 s
 SYNC_STALE_SECONDS = 45  # heartbeat turns orange when the last sync is older than this
-SYNC_MIN_GAP_SECONDS = 5  # a rerun right after a sync does not sync again
+SYNC_MIN_GAP_SECONDS = 2  # a rerun right after a sync does not sync again
 SOURCE_SPLIT_PCT = 0.15  # flag a player when Sleeper and FantasyPros differ by this much
 REHEARSAL_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".rehearsal_draft.json"
 )
-STATE_FILE = os.path.join(
+# DRAFT_STATE_FILE lets headless test runs keep their marks away from the live app's
+STATE_FILE = os.getenv("DRAFT_STATE_FILE") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".draft_state.json"
 )
 LEAGUE_FILE = os.path.join(
@@ -1034,7 +1038,8 @@ if mode == "Draft":
 
         if auto_sync:
             near_turn = next_pick is not None and next_pick["picks_until_mine"] <= NEAR_TURN_PICKS
-            poll_every = SYNC_INTERVAL_NEAR_TURN if near_turn else SYNC_INTERVAL
+            drafting = (st.session_state.draft_info or {}).get("status") == "drafting"
+            poll_every = SYNC_INTERVAL_NEAR_TURN if near_turn else (SYNC_INTERVAL_DRAFTING if drafting else SYNC_INTERVAL)
 
             @st.fragment(run_every=poll_every)
             def auto_sync_fragment():
@@ -1057,17 +1062,27 @@ if mode == "Draft":
         st.markdown(status_html, unsafe_allow_html=True)
 
     # ---- Recommendation ----
+    roster_counts = Counter(p["position"] for p in my_roster)
+    rank_args = (available, needs, len(my_roster), total_picks, roster_counts)
+    # Between turns the headline is the realistic plan (a stricter reach gate); the
+    # best player on the board right now is shown alongside with his odds.
     shortlist = rank_candidates(
-        available,
-        needs,
-        len(my_roster),
-        total_picks,
-        Counter(p["position"] for p in my_roster),
-        picks_made=picks_made,
-        gap=horizon,
-        reach_gap=reach,
-        demand=demand,
+        *rank_args, picks_made=picks_made, gap=horizon, reach_gap=reach, demand=demand,
+        min_reach=HEADLINE_REACH if reach else None,
     )
+    if reach and not shortlist:
+        shortlist = rank_candidates(*rank_args, picks_made=picks_made, gap=horizon, reach_gap=reach, demand=demand)
+    best_now = rank_candidates(
+        *rank_args, picks_made=picks_made, gap=horizon, reach_gap=0, demand=demand, limit=1
+    ) if reach else []
+    # The highest-VOR healthy player the rules are holding back, so the pick never looks arbitrary
+    held = None
+    if shortlist:
+        top_vor = next((p for p in available if not is_unavailable(p)), None)
+        if top_vor is not None and top_vor is not shortlist[0]["player"] and top_vor["vor"] > shortlist[0]["vor"]:
+            why_not = held_reason(top_vor, roster_counts, len(my_roster), total_picks, needs)
+            if why_not:
+                held = (top_vor, why_not)
     tier_left = Counter((p["position"], p.get("tier")) for p in available)
     pick = shortlist[0]["player"] if shortlist else None
     if shortlist:
@@ -1105,8 +1120,20 @@ if mode == "Draft":
             line2 = f"Won't wait: {top['back']:.0%} to still be there next turn{later_txt}"
         elif top["mode"] == "reach":
             line2 = f"If he's gone when you're up{later_txt}" if later_txt else "Fills an open slot in the final rounds."
+            if best_now and best_now[0]["player"] is not pick:
+                b = best_now[0]
+                odds = survival_for(b["player"], picks_made, reach, demand)
+                line2 += (
+                    f"<br>Best on the board right now: <span style='color:#ffffff'>{b['player']['name']}</span> "
+                    f"({b['player']['position']}, VOR {b['vor']:.0f}) · {odds:.0%} to reach you"
+                )
         else:
             line2 = "Draft order not published yet: ranking by value and need only."
+        if held:
+            line2 += (
+                f"<br><span style='color:#7d8590'>Holding off on {held[0]['name']} "
+                f"({held[0]['position']}, VOR {held[0]['vor']:.0f}): {held[1]}.</span>"
+            )
 
         photo = sleeper_photo(pick.get("player_id"))
         with st.container(border=True):
