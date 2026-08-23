@@ -570,8 +570,11 @@ needs = allocation.needs
 
 
 
-# Total picks follow the draft being synced (a mock may have a different round count)
+# Round count and team count follow the draft being synced (a mock may differ from the league);
+# the board itself (replacement levels, scoring) always stays the league's.
+_draft_settings = ((st.session_state.draft_info or {}).get("draft_meta") or {}).get("settings") or {}
 total_picks = (st.session_state.draft_info or {}).get("rounds") or (sum(starters.values()) + bench_spots)
+draft_teams = _draft_settings.get("teams") or num_teams
 
 
 # ==================== SIDEBAR ====================
@@ -862,8 +865,8 @@ with st.sidebar:
                     scoring=scoring_label,
                     my_roster=my_roster,
                     taken=picks_made,
-                    round_num=picks_made // num_teams + 1,
-                    pick_in_round=picks_made % num_teams + 1,
+                    round_num=picks_made // draft_teams + 1,
+                    pick_in_round=picks_made % draft_teams + 1,
                     available=available,
                     needs=needs,
                     scoring_notes=scoring_summary(league["scoring_settings"]) if league else None,
@@ -925,8 +928,8 @@ if mode == "Draft":
 
     # ---- Draft status cards ----
     picks_made = (st.session_state.draft_info or {}).get("picks") or len(drafted_keys)
-    round_num = picks_made // num_teams + 1
-    pick_in_round = picks_made % num_teams + 1
+    round_num = picks_made // draft_teams + 1
+    pick_in_round = picks_made % draft_teams + 1
 
     next_pick = (st.session_state.draft_info or {}).get("next")
     if next_pick is None:
@@ -957,7 +960,7 @@ if mode == "Draft":
     else:
         reach, horizon = 0, None
         gap_note = "in the next round (draft order not published yet)"
-        panel_gap = num_teams
+        panel_gap = draft_teams
 
     # Opponent needs: the teams picking in a window scale each position's hazard
     draft_meta = (st.session_state.draft_info or {}).get("draft_meta")
@@ -1140,7 +1143,7 @@ if mode == "Draft":
     with wait_box:
         waiting = cost_of_waiting(
             available, ["QB", "RB", "WR", "TE"], picks_made,
-            horizon if horizon is not None else num_teams, reach_gap=reach, demand=demand,
+            horizon if horizon is not None else draft_teams, reach_gap=reach, demand=demand,
         )
         needs_ahead = demand(panel_gap)
         if needs_ahead:
