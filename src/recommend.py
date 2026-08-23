@@ -21,7 +21,10 @@ MIN_REACH_PROBABILITY = 0.25  # between turns, only players this likely to reach
 # plan reached the owner 6 of 14 times, the 65% plan 9 of 14.
 HEADLINE_REACH = 0.65
 
-NEED_BONUS = 30.0  # added to VOR when the player fills an open starting slot (swept: 25-35 best)
+NEED_BONUS = 30.0  # added to VOR when the player fills an open dedicated slot (swept: 25-35 best)
+# Filling only the FLEX is worth less than filling a slot only this position can fill:
+# a third RB into the FLEX leaves WR2 open, and only a WR can close that.
+FLEX_NEED_BONUS = 15.0
 LATE_NEED_BONUS = 100.0  # K/DEF still open inside the final picks: take one
 LATE_ROUND_WINDOW = 3  # K and DEF are only considered within this many picks of the end
 LATE_ONLY_POSITIONS = ("K", "DEF")
@@ -174,12 +177,16 @@ def cost_of_waiting(available, positions, picks_made, gap, reach_gap=0, demand=N
 
 
 def fills_need(position, needs):
+    return need_kind(position, needs) is not None
+
+
+def need_kind(position, needs):
+    """'slot' if an open slot only this position can fill, 'flex' if only a flex slot, else None."""
     if needs.get(position, 0) > 0:
-        return True
-    return any(
-        needs.get(slot, 0) > 0 and position in eligible
-        for slot, eligible in FLEX_ELIGIBILITY.items()
-    )
+        return "slot"
+    if any(needs.get(slot, 0) > 0 and position in eligible for slot, eligible in FLEX_ELIGIBILITY.items()):
+        return "flex"
+    return None
 
 
 SHORTLIST = 4
@@ -248,10 +255,13 @@ def rank_candidates(
     def score(p):
         market = use_market and p["position"] not in LATE_ONLY_POSITIONS
         lookahead = expected_best_vor(available, None, at_my_pick, gap, exclude=p, demand=demand) if market else 0.0
-        need = fills_need(p["position"], needs)
+        kind = need_kind(p["position"], needs)
+        need = kind is not None
         bonus = 0.0
-        if need:
+        if kind == "slot":
             bonus = LATE_NEED_BONUS if p["position"] in LATE_ONLY_POSITIONS else NEED_BONUS
+        elif kind == "flex":
+            bonus = FLEX_NEED_BONUS
         return {
             "player": p,
             "vor": p["vor"],

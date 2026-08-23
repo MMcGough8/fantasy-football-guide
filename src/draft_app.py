@@ -52,6 +52,7 @@ FEED_CACHE_SECONDS = 1800  # projections refresh twice an hour; a rebuild takes 
 SYNC_STALE_SECONDS = 45  # heartbeat turns orange when the last sync is older than this
 SYNC_MIN_GAP_SECONDS = 2  # a rerun right after a sync does not sync again
 SOURCE_SPLIT_PCT = 0.15  # flag a player when Sleeper and FantasyPros differ by this much
+CLOSE_VOR = 8  # players within this much VOR of the pick are shown as alternatives
 REHEARSAL_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".rehearsal_draft.json"
 )
@@ -279,6 +280,12 @@ def player_key(p):
 
 
 SOURCE_LABELS = {"sleeper": "Sleeper", "fp": "FP", "espn": "ESPN"}
+
+
+def fills_need_ui(p):
+    from recommend import need_kind
+
+    return need_kind(p["position"], needs) is not None
 
 
 def sources_disagree(p):
@@ -1159,6 +1166,21 @@ if mode == "Draft":
                 use_container_width=True,
             )
             b2.button("He got taken", on_click=draft_player, args=(pick, False), use_container_width=True)
+            # Everyone the rules would allow who is within a few VOR of the pick, best at each
+            # position first, so a close call (RB 41 vs WR 36 with WR2 open) is visible
+            close, seen_pos = [], set()
+            for p in available:
+                if p is pick or is_unavailable(p) or p["position"] in LATE_ONLY_POSITIONS:
+                    continue
+                if p["vor"] > pick["vor"] + CLOSE_VOR or p["vor"] < pick["vor"] - CLOSE_VOR:
+                    continue
+                if held_reason(p, roster_counts, len(my_roster), total_picks, needs):
+                    continue
+                if p["position"] in seen_pos:
+                    continue
+                seen_pos.add(p["position"]); close.append(p)
+                if len(close) == 4:
+                    break
             others = shortlist[1:]
             if others:
                 def alt_chip(c):
@@ -1174,6 +1196,18 @@ if mode == "Draft":
                 st.markdown(
                     "<div style='margin-top:-4px'><span class='rank-num' style='margin-right:6px'>Next best</span>"
                     + "".join(alt_chip(c) for c in others)
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+            if close:
+                def close_chip(p):
+                    slot = "fills " + ("FLEX" if not needs.get(p["position"]) else p["position"]) if fills_need_ui(p) else "bench"
+                    return (
+                        f"<span class='chip'>{p['name']} <span style='color:#9aa4b2'>{p['position']} · VOR {p['vor']:.0f} · {slot}</span></span>"
+                    )
+                st.markdown(
+                    f"<div style='margin-top:2px'><span class='rank-num' style='margin-right:6px'>Close in value (±{CLOSE_VOR})</span>"
+                    + "".join(close_chip(p) for p in close)
                     + "</div>",
                     unsafe_allow_html=True,
                 )
