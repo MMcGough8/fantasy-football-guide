@@ -183,3 +183,34 @@ def test_two_open_slots_at_a_position_outweigh_one():
     available = [_p("TE A", "TE", 40), _p("WR A", "WR", 40)]
     top = rank_candidates(available, {"TE": 1, "WR": 2}, 3, TOTAL_PICKS, limit=1)[0]
     assert top["player"]["name"] == "WR A"
+
+
+def test_headline_is_the_here_and_now_pick_and_the_plan_is_the_reachable_one():
+    from recommend import headline_and_plan, HEADLINE_REACH
+
+    # Coin flip is the better player but unlikely to reach me; Safe almost certainly will
+    available = [dict(_p("Coin flip", "WR", 90), adp=20), dict(_p("Safe", "WR", 60), adp=60)]
+    now, plan = headline_and_plan(available, {"WR": 2}, 1, 14, {}, picks_made=18, gap=18, reach=6)
+    assert now[0]["player"]["name"] == "Coin flip"
+    assert now[0]["mode"] == "now"
+    assert plan[0]["player"]["name"] == "Safe"
+    assert plan[0]["reach"] >= HEADLINE_REACH
+
+
+def test_headline_and_plan_on_the_clock_has_no_plan():
+    from recommend import headline_and_plan
+
+    available = [dict(_p("Coin flip", "WR", 90), adp=20), dict(_p("Safe", "WR", 60), adp=60)]
+    now, plan = headline_and_plan(available, {"WR": 2}, 1, 14, {}, picks_made=18, gap=18, reach=0)
+    assert now[0]["player"]["name"] == "Coin flip"
+    assert plan == []
+
+
+def test_headline_and_plan_falls_back_when_nobody_clears_the_headline_gate():
+    from recommend import headline_and_plan
+
+    # Both players are coin flips to reach me: the plan still names somebody
+    available = [dict(_p("A", "WR", 90), adp=20), dict(_p("B", "WR", 80), adp=22)]
+    now, plan = headline_and_plan(available, {"WR": 2}, 1, 14, {}, picks_made=18, gap=18, reach=6)
+    assert now[0]["player"]["name"] == "A"
+    assert plan and plan[0]["mode"] == "reach"

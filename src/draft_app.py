@@ -17,10 +17,10 @@ from recommend import (
     LATE_ONLY_POSITIONS,
     LATE_ROUND_WINDOW,
     cost_of_waiting,
+    headline_and_plan,
     held_reason,
     is_unavailable,
     likely_gone,
-    rank_candidates,
     survival_for,
 )
 from pick_sync import apply_picks, index_board_by_player_id, next_pick_info
@@ -1071,17 +1071,12 @@ if mode == "Draft":
     # ---- Recommendation ----
     roster_counts = Counter(p["position"] for p in my_roster)
     rank_args = (available, needs, len(my_roster), total_picks, roster_counts)
-    # Between turns the headline is the realistic plan (a stricter reach gate); the
-    # best player on the board right now is shown alongside with his odds.
-    shortlist = rank_candidates(
-        *rank_args, picks_made=picks_made, gap=horizon, reach_gap=reach, demand=demand,
-        min_reach=HEADLINE_REACH if reach else None,
+    # The headline is always the here-and-now pick (what to take if on the clock this
+    # instant). Between turns the fallback plan is a one-line reminder under it, so the
+    # card never leads with a player being saved for later.
+    shortlist, plan = headline_and_plan(
+        *rank_args, picks_made=picks_made, gap=horizon, reach=reach, demand=demand
     )
-    if reach and not shortlist:
-        shortlist = rank_candidates(*rank_args, picks_made=picks_made, gap=horizon, reach_gap=reach, demand=demand)
-    best_now = rank_candidates(
-        *rank_args, picks_made=picks_made, gap=horizon, reach_gap=0, demand=demand, limit=1
-    ) if reach else []
     # The highest-VOR healthy player the rules are holding back, so the pick never looks arbitrary
     held = None
     if shortlist:
@@ -1095,10 +1090,13 @@ if mode == "Draft":
     if shortlist:
         top = shortlist[0]
         pos, tier = pick["position"], pick.get("tier")
-        if top["mode"] == "now":
+        between_turns = bool(reach) and top["mode"] == "now"
+        reach_odds = survival_for(pick, picks_made, reach, demand) if between_turns else None
+        if between_turns:
+            pill_color = "#34d399" if reach_odds >= HEADLINE_REACH else "#fbbf24"
+            pill_text = f"BEST NOW · {reach_odds:.0%} TO REACH YOU"
+        elif top["mode"] == "now":
             pill_text, pill_color = "TAKE NOW", "#34d399"
-        elif top["mode"] == "reach":
-            pill_text, pill_color = f"IF HE REACHES YOU · {top['reach']:.0%}", "#fbbf24"
         else:
             pill_text, pill_color = "BEST VALUE", "#38bdf8"
         pill = (
@@ -1123,18 +1121,19 @@ if mode == "Draft":
         later_txt = f" · best {pos} then ≈ {top['later']:.0f} VOR" if top["later"] is not None else ""
         if top["mode"] == "now" and pos in LATE_ONLY_POSITIONS:
             line2 = "Last rounds: fill the open slot now."
+        elif between_turns:
+            picks_txt = f"{reach} pick{'s' if reach != 1 else ''} before you're up"
+            fallback = plan[0] if plan else None
+            if fallback and fallback["player"] is not pick:
+                f = fallback["player"]
+                line2 = (
+                    f"{picks_txt}. <span style='color:#9aa4b2'>If he's gone: {f['name']} "
+                    f"({f['position']}, VOR {fallback['vor']:.0f}) · {fallback['reach']:.0%} to reach you</span>"
+                )
+            else:
+                line2 = f"{picks_txt}. He should still be there{later_txt}"
         elif top["mode"] == "now":
             line2 = f"Won't wait: {top['back']:.0%} to still be there next turn{later_txt}"
-        elif top["mode"] == "reach":
-            line2 = f"If he's gone when you're up{later_txt}" if later_txt else "Fills an open slot in the final rounds."
-            if best_now and best_now[0]["player"] is not pick:
-                b = best_now[0]
-                odds = survival_for(b["player"], picks_made, reach, demand)
-                line2 += (
-                    f"<br><span style='color:#ffffff;font-weight:600'>If {b['player']['name']} "
-                    f"({b['player']['position']}, VOR {b['vor']:.0f}) is still there, take him</span> "
-                    f"<span class='rank-num'>· {odds:.0%} chance he reaches you</span>"
-                )
         else:
             line2 = "Draft order not published yet: ranking by value and need only."
         if held:
@@ -1186,8 +1185,8 @@ if mode == "Draft":
             if others:
                 def alt_chip(c):
                     odds = ""
-                    if c["mode"] == "reach":
-                        odds = f" · {c['reach']:.0%} reach"
+                    if between_turns:
+                        odds = f" · {survival_for(c['player'], picks_made, reach, demand):.0%} reach"
                     elif c["mode"] == "now":
                         odds = f" · {c['back']:.0%} back"
                     return (

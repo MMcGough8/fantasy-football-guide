@@ -300,6 +300,30 @@ def rank_candidates(
     return ranked[:limit]
 
 
+def headline_and_plan(
+    available, needs, roster_size, total_picks, roster_counts=None,
+    picks_made=None, gap=None, reach=0, demand=None, limit=SHORTLIST,
+):
+    """The here-and-now shortlist and, between turns, the fallback plan.
+
+    The headline is always what to take if on the clock this instant (reach_gap 0),
+    so the card never leads with a player being saved for later. `plan` is the best
+    candidate likely to still be there at my pick (the `HEADLINE_REACH` gate, loosened
+    to the ordinary candidate gate when nobody clears it); empty on the clock.
+    """
+    args = (available, needs, roster_size, total_picks, roster_counts)
+    now = rank_candidates(*args, picks_made=picks_made, gap=gap, reach_gap=0, demand=demand, limit=limit)
+    if not reach:
+        return now, []
+    plan = rank_candidates(
+        *args, picks_made=picks_made, gap=gap, reach_gap=reach, demand=demand,
+        limit=limit, min_reach=HEADLINE_REACH,
+    )
+    if not plan:
+        plan = rank_candidates(*args, picks_made=picks_made, gap=gap, reach_gap=reach, demand=demand, limit=limit)
+    return now, plan
+
+
 def recommend_pick(
     available, needs, roster_size, total_picks, roster_counts=None,
     picks_made=None, gap=None, reach_gap=0, demand=None,
