@@ -49,6 +49,9 @@ FEED_CACHE_SECONDS = 1800  # projections refresh twice an hour; a rebuild takes 
 SYNC_STALE_SECONDS = 45  # heartbeat turns orange when the last sync is older than this
 SYNC_MIN_GAP_SECONDS = 5  # a rerun right after a sync does not sync again
 SOURCE_SPLIT_PCT = 0.15  # flag a player when Sleeper and FantasyPros differ by this much
+REHEARSAL_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".rehearsal_draft.json"
+)
 STATE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".draft_state.json"
 )
@@ -389,6 +392,13 @@ if "draft_info" not in st.session_state:
     st.session_state.draft_info = None
 if "auto_sync_pref" not in st.session_state:
     st.session_state.auto_sync_pref = bool((st.session_state.league or {}).get("draft_id"))
+if "rehearsal_draft_id" not in st.session_state and os.path.exists(REHEARSAL_FILE):
+    try:
+        with open(REHEARSAL_FILE) as f:
+            st.session_state.rehearsal_draft_id = json.load(f)["draft_id"]
+        st.session_state.sync_requested = True
+    except (OSError, ValueError, KeyError):
+        pass
 if "sort_pref" not in st.session_state:
     st.session_state.sort_pref = "VOR"
 if "layout_pref" not in st.session_state:
@@ -642,31 +652,37 @@ with st.sidebar:
             st.session_state.rehearsal_error = None
             reset_draft()
             st.session_state.sync_requested = True  # show the mock's picks on this same click
+            try:
+                with open(REHEARSAL_FILE, "w") as f:
+                    json.dump({"draft_id": draft_id}, f)  # survives a refresh
+            except OSError:
+                pass
 
         def stop_rehearsal():
             st.session_state.pop("rehearsal_draft_id", None)
             reset_draft()
+            try:
+                os.remove(REHEARSAL_FILE)
+            except FileNotFoundError:
+                pass
 
-        with st.expander("Rehearse with a mock draft", expanded=bool(st.session_state.get("rehearsal_draft_id"))):
-            st.caption(
-                "Start a mock draft in the Sleeper app and paste its link, or run "
-                "`simulate.py --emit DIR --stream 8` and paste `file:DIR`. Either way the picks "
-                "sync onto this league's board and scoring."
+        st.markdown("<div class='sec-head'>Mock Draft Rehearsal</div>", unsafe_allow_html=True)
+        if st.session_state.get("rehearsal_draft_id"):
+            st.markdown(
+                f"<span style='color:#fbbf24'>Rehearsing with draft "
+                f"{st.session_state.rehearsal_draft_id.replace('file:', '')}</span>",
+                unsafe_allow_html=True,
             )
-            if st.session_state.get("rehearsal_draft_id"):
-                st.markdown(
-                    f"<span style='color:#fbbf24'>Rehearsing with draft {st.session_state.rehearsal_draft_id}</span>",
-                    unsafe_allow_html=True,
-                )
-                st.button("Stop rehearsal", on_click=stop_rehearsal, use_container_width=True)
-            else:
-                # A form so Enter in the box connects, not just the button
-                with st.form("rehearsal_form", border=False):
-                    st.text_input("Mock draft link or id", key="rehearsal_input", label_visibility="collapsed",
-                                  placeholder="https://sleeper.com/draft/nfl/…")
-                    st.form_submit_button("Use this draft", on_click=start_rehearsal, use_container_width=True, type="primary")
-                if st.session_state.get("rehearsal_error"):
-                    st.warning(st.session_state.rehearsal_error)
+            st.button("Stop rehearsal", on_click=stop_rehearsal, use_container_width=True)
+        else:
+            st.caption("Paste a Sleeper mock draft link here and press Enter.")
+            # A form so Enter in the box connects, not just the button
+            with st.form("rehearsal_form", border=False):
+                st.text_input("Mock draft link or id", key="rehearsal_input", label_visibility="collapsed",
+                              placeholder="https://sleeper.com/draft/nfl/…")
+                st.form_submit_button("Rehearse with this draft", on_click=start_rehearsal, use_container_width=True, type="primary")
+            if st.session_state.get("rehearsal_error"):
+                st.warning(st.session_state.rehearsal_error)
     else:
         username = st.text_input(
             "Sleeper username",
