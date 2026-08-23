@@ -29,6 +29,10 @@ FLEX_NEED_BONUS = 15.0
 # is more urgent than one TE slot. Simulated cost ~3 lineup points of ~1,930 (noise)
 # for the second WR arriving about half a round earlier.
 NEED_BONUS_PER_EXTRA_SLOT = 15.0
+# With market info, the need bonus is scaled by the chance of losing the player
+# before my next turn (floor below). A QB who is 95% to still be there next turn
+# is not urgent; a WR who is 20% to be there is. Off (1.0) means the flat bonus.
+NEED_URGENCY_FLOOR = 0.25
 LATE_NEED_BONUS = 100.0  # K/DEF still open inside the final picks: take one
 LATE_ROUND_WINDOW = 3  # K and DEF are only considered within this many picks of the end
 LATE_ONLY_POSITIONS = ("K", "DEF")
@@ -270,6 +274,15 @@ def rank_candidates(
                 bonus = NEED_BONUS + NEED_BONUS_PER_EXTRA_SLOT * extra
         elif kind == "flex":
             bonus = FLEX_NEED_BONUS
+        if market and bonus and p["position"] not in LATE_ONLY_POSITIONS:
+            # Filling a need only matters now if this player will not be there later,
+            # unless the draft is ending and open slots must be filled.
+            back = survival_for(p, at_my_pick, gap, demand)
+            open_slots = sum(needs.values())
+            picks_left = total_picks - roster_size
+            must_fill = picks_left <= open_slots + 1
+            if not must_fill:
+                bonus *= max(1.0 - back, NEED_URGENCY_FLOOR)
         return {
             "player": p,
             "vor": p["vor"],
