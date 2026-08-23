@@ -641,6 +641,7 @@ with st.sidebar:
             st.session_state.rehearsal_draft_id = draft_id
             st.session_state.rehearsal_error = None
             reset_draft()
+            st.session_state.sync_requested = True  # show the mock's picks on this same click
 
         def stop_rehearsal():
             st.session_state.pop("rehearsal_draft_id", None)
@@ -659,9 +660,11 @@ with st.sidebar:
                 )
                 st.button("Stop rehearsal", on_click=stop_rehearsal, use_container_width=True)
             else:
-                st.text_input("Mock draft link or id", key="rehearsal_input", label_visibility="collapsed",
-                              placeholder="https://sleeper.com/draft/nfl/…")
-                st.button("Use this draft", on_click=start_rehearsal, use_container_width=True)
+                # A form so Enter in the box connects, not just the button
+                with st.form("rehearsal_form", border=False):
+                    st.text_input("Mock draft link or id", key="rehearsal_input", label_visibility="collapsed",
+                                  placeholder="https://sleeper.com/draft/nfl/…")
+                    st.form_submit_button("Use this draft", on_click=start_rehearsal, use_container_width=True, type="primary")
                 if st.session_state.get("rehearsal_error"):
                     st.warning(st.session_state.rehearsal_error)
     else:
