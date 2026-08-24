@@ -214,3 +214,57 @@ def test_headline_and_plan_falls_back_when_nobody_clears_the_headline_gate():
     now, plan = headline_and_plan(available, {"WR": 2}, 1, 14, {}, picks_made=18, gap=18, reach=6)
     assert now[0]["player"]["name"] == "A"
     assert plan and plan[0]["mode"] == "reach"
+
+
+def test_safe_starter_at_a_thin_position_still_waits():
+    from recommend import rank_candidates
+
+    # The Dak case: the QB slot is open but the QB is 95%+ to be there next turn,
+    # so filling the slot now has no urgency; the WR about to vanish wins.
+    available = [
+        dict(_p("QB Safe", "QB", 23), adp=120),
+        dict(_p("WR Now", "WR", 30), adp=62),
+        dict(_p("WR Later", "WR", 12), adp=100),
+    ]
+    needs = {"QB": 1, "FLEX": 1}
+    top = rank_candidates(available, needs, 5, 14, picks_made=56, gap=8, reach_gap=0, limit=1)[0]
+    assert top["player"]["name"] == "WR Now"
+
+
+def test_same_position_same_slot_higher_vor_wins():
+    from recommend import rank_candidates
+
+    # Rice vs Pickens: both fill the same open slot, so survival odds must not
+    # promote the lower-VOR player. The urgency bonus alone would headline the
+    # about-to-vanish WR Sooner; the same-position tie-break restores WR Better.
+    available = [dict(_p("WR Better", "WR", 54), adp=30), dict(_p("WR Sooner", "WR", 47), adp=25)]
+    needs = {"WR": 2}
+    ranked = rank_candidates(available, needs, 3, 14, picks_made=31, gap=8, reach_gap=0, limit=2)
+    assert ranked[0]["player"]["name"] == "WR Better"
+
+
+def test_same_position_tiebreak_does_not_override_a_big_gap():
+    from recommend import rank_candidates
+
+    # A much better score at the same position is not "a tie": keep it on top.
+    available = [dict(_p("WR Better", "WR", 50), adp=60), dict(_p("WR Gone", "WR", 45), adp=8)]
+    needs = {"WR": 2}
+    ranked = rank_candidates(available, needs, 3, 14, picks_made=31, gap=20, reach_gap=0, limit=2)
+    assert ranked[0]["player"]["name"] == "WR Gone"
+
+
+def test_kdef_window_opens_early_when_the_league_runs_on_the_position():
+    from recommend import rank_candidates, LATE_RUN_STARTED, EXTENDED_LATE_WINDOW, LATE_ROUND_WINDOW
+
+    assert LATE_ROUND_WINDOW < EXTENDED_LATE_WINDOW
+    available = [dict(_p("Top K", "K", 18), adp=130), dict(_p("WR Filler", "WR", -20), adp=140)]
+    needs = {"K": 1, "DEF": 1}
+    # 10 of 14 picks made: outside the normal window, inside the extended one
+    common = dict(picks_made=120, gap=8, reach_gap=0, limit=3)
+    quiet = rank_candidates(available, needs, 10, 14, drafted_positions={"K": LATE_RUN_STARTED - 1}, **common)
+    assert all(c["player"]["position"] != "K" for c in quiet)
+    run_on = rank_candidates(available, needs, 10, 14, drafted_positions={"K": LATE_RUN_STARTED}, **common)
+    assert run_on[0]["player"]["name"] == "Top K"
+    # far from the end the run alone is not enough
+    early = rank_candidates(available, needs, 5, 14, drafted_positions={"K": 12}, picks_made=60, gap=8, reach_gap=0, limit=3)
+    assert all(c["player"]["position"] != "K" for c in early)

@@ -141,9 +141,12 @@ def owner_pick(owner, available, starters, picks_made, pick_no, num_teams, round
         return cache[gap]
 
     needs = allocate_slots(owner.roster, starters).needs
+    from collections import Counter
+    drafted_positions = Counter(e["position"] for e in pick_log)
     ranked = rank_candidates(
         available, needs, len(owner.roster), rounds, owner.counts,
         picks_made=picks_made, gap=horizon, reach_gap=0, demand=demand, limit=1,
+        drafted_positions=drafted_positions,
     )
     if not ranked:
         return available[0], "nothing left"

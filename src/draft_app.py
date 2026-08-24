@@ -19,6 +19,7 @@ from recommend import (
     cost_of_waiting,
     headline_and_plan,
     held_reason,
+    late_window_open,
     is_unavailable,
     likely_gone,
     survival_for,
@@ -995,6 +996,10 @@ if mode == "Draft":
     # Opponent needs: the teams picking in a window scale each position's hazard
     draft_meta = (st.session_state.draft_info or {}).get("draft_meta")
     pick_positions = (st.session_state.draft_info or {}).get("pick_positions") or []
+    # League-wide drafted counts per position; opens the K/DEF window when a run starts
+    drafted_positions = Counter(
+        (pk.get("metadata") or {}).get("position") for pk in pick_positions
+    )
     _demand_cache = {}
 
     def demand(gap):
@@ -1075,14 +1080,15 @@ if mode == "Draft":
     # instant). Between turns the fallback plan is a one-line reminder under it, so the
     # card never leads with a player being saved for later.
     shortlist, plan = headline_and_plan(
-        *rank_args, picks_made=picks_made, gap=horizon, reach=reach, demand=demand
+        *rank_args, picks_made=picks_made, gap=horizon, reach=reach, demand=demand,
+        drafted_positions=drafted_positions,
     )
     # The highest-VOR healthy player the rules are holding back, so the pick never looks arbitrary
     held = None
     if shortlist:
         top_vor = next((p for p in available if not is_unavailable(p)), None)
         if top_vor is not None and top_vor is not shortlist[0]["player"] and top_vor["vor"] > shortlist[0]["vor"]:
-            why_not = held_reason(top_vor, roster_counts, len(my_roster), total_picks, needs)
+            why_not = held_reason(top_vor, roster_counts, len(my_roster), total_picks, needs, drafted_positions)
             if why_not:
                 held = (top_vor, why_not)
     tier_left = Counter((p["position"], p.get("tier")) for p in available)
@@ -1174,7 +1180,7 @@ if mode == "Draft":
                     continue
                 if p["vor"] > pick["vor"] + CLOSE_VOR or p["vor"] < pick["vor"] - CLOSE_VOR:
                     continue
-                if held_reason(p, roster_counts, len(my_roster), total_picks, needs):
+                if held_reason(p, roster_counts, len(my_roster), total_picks, needs, drafted_positions):
                     continue
                 if p["position"] in seen_pos:
                     continue
@@ -1387,12 +1393,13 @@ if mode == "Draft":
         on_change=lambda: st.session_state.update(sort_pref=st.session_state.sort_widget),
     )
 
-    in_late_window = total_picks - len(my_roster) <= LATE_ROUND_WINDOW
     if st.session_state.pos_filter == "All":
-        # K/DEF are last-round picks; keep them off the main list until then
+        # K/DEF are late-round picks; keep them off the main list until the final
+        # picks or a league-wide run on the position opens the window
         shown = [
             p for p in available
-            if in_late_window or p["position"] not in LATE_ONLY_POSITIONS
+            if p["position"] not in LATE_ONLY_POSITIONS
+            or late_window_open(p["position"], len(my_roster), total_picks, needs, drafted_positions)
         ]
     else:
         shown = [p for p in available if p["position"] == st.session_state.pos_filter]

@@ -31,10 +31,25 @@ FLEX_NEED_BONUS = 15.0
 NEED_BONUS_PER_EXTRA_SLOT = 15.0
 # With market info, the need bonus is scaled by the chance of losing the player
 # before my next turn (floor below). A QB who is 95% to still be there next turn
-# is not urgent; a WR who is 20% to be there is. Off (1.0) means the flat bonus.
+# is not urgent; a WR who is 20% to be there is. A position-level version (how
+# much the slot's filler degrades if I wait) was tried after the 2026 live draft
+# and simulated ~5 lineup points WORSE: with a deep flat WR pool it zeroes the
+# bonus every turn, and the recommender drifts into pure-VOR RB stacking instead
+# of filling the lineup. The player-level proxy keeps the slot-filling force.
 NEED_URGENCY_FLOOR = 0.25
+# Between two players at the SAME position filling the same slot, survival odds
+# must not promote the lower-VOR one (the 2026 live-draft Pickens-over-Rice bug):
+# the bonus difference is double-counted noise there, and the two-step math says
+# the reorder is worth at most a point or two. Within this adjusted-score margin
+# the higher-VOR player leads.
+SAME_POSITION_TIEBREAK = 10.0
 LATE_NEED_BONUS = 100.0  # K/DEF still open inside the final picks: take one
 LATE_ROUND_WINDOW = 3  # K and DEF are only considered within this many picks of the end
+# The window loosens once the league actually runs on K/DEF (the 2026 room
+# started at pick 105, two rounds "early"): with LATE_RUN_STARTED of them gone
+# league-wide, they are draftable within EXTENDED_LATE_WINDOW picks of the end.
+LATE_RUN_STARTED = 2
+EXTENDED_LATE_WINDOW = 6
 LATE_ONLY_POSITIONS = ("K", "DEF")
 # Most of a position you would ever roster in a 14-round draft; stops pure VOR
 # from stacking backup QBs and TEs once the starters are filled.
@@ -140,7 +155,20 @@ def reaches_me(p, picks_made, reach_gap, demand=None, min_reach=None):
     return survival_for(p, picks_made, reach_gap, demand) >= threshold
 
 
-def held_reason(p, roster_counts, roster_size, total_picks, needs):
+def late_window_open(position, roster_size, total_picks, needs, drafted_positions=None):
+    """May a K/DEF be drafted now? The last LATE_ROUND_WINDOW picks always; earlier
+    (within EXTENDED_LATE_WINDOW) only once the league-wide run on the position has
+    started. `drafted_positions` is {position: count drafted by anyone}."""
+    if not fills_need(position, needs):
+        return False
+    picks_left = total_picks - roster_size
+    if picks_left <= LATE_ROUND_WINDOW:
+        return True
+    run_started = (drafted_positions or {}).get(position, 0) >= LATE_RUN_STARTED
+    return run_started and picks_left <= EXTENDED_LATE_WINDOW
+
+
+def held_reason(p, roster_counts, roster_size, total_picks, needs, drafted_positions=None):
     """Why the recommender will not take `p` right now, or None if it would consider him."""
     pos = p["position"]
     counts = roster_counts or {}
@@ -150,8 +178,8 @@ def held_reason(p, roster_counts, roster_size, total_picks, needs):
         return f"at the {pos} cap ({POSITION_CAPS[pos]})"
     picks_left = total_picks - roster_size
     if pos in LATE_ONLY_POSITIONS:
-        if picks_left > LATE_ROUND_WINDOW:
-            return f"{pos} waits for the last {LATE_ROUND_WINDOW} picks"
+        if picks_left > LATE_ROUND_WINDOW and not late_window_open(pos, roster_size, total_picks, needs, drafted_positions):
+            return f"{pos} waits for the last {LATE_ROUND_WINDOW} picks (or a league-wide run)"
         if not fills_need(pos, needs):
             return f"{pos} slot already filled"
     if pos in ("QB", "TE") and counts.get(pos, 0) >= 1 and roster_size + 1 < SECOND_QB_TE_ROUND:
@@ -203,6 +231,7 @@ SHORTLIST = 4
 def rank_candidates(
     available, needs, roster_size, total_picks, roster_counts=None,
     picks_made=None, gap=None, reach_gap=0, limit=SHORTLIST, demand=None, min_reach=None,
+    drafted_positions=None,
 ):
     """Scored shortlist, best first. Each entry: player, adjusted, vor, lookahead,
     fills_need, reach (odds he reaches my pick), back (odds he is still there the
@@ -233,8 +262,9 @@ def rank_candidates(
         if is_unavailable(p):
             return False
         if pos in LATE_ONLY_POSITIONS:
-            # A kicker or defense is only ever a pick when a slot is open and the draft is ending
-            return in_late_window and fills_need(pos, needs)
+            # A kicker or defense is only a pick when a slot is open and either the
+            # draft is ending or the league is already running on the position
+            return late_window_open(pos, roster_size, total_picks, needs, drafted_positions)
         if pos in ("QB", "TE") and counts.get(pos, 0) >= 1 and current_round < SECOND_QB_TE_ROUND:
             return False
         return True
@@ -279,7 +309,6 @@ def rank_candidates(
             # unless the draft is ending and open slots must be filled.
             back = survival_for(p, at_my_pick, gap, demand)
             open_slots = sum(needs.values())
-            picks_left = total_picks - roster_size
             must_fill = picks_left <= open_slots + 1
             if not must_fill:
                 bonus *= max(1.0 - back, NEED_URGENCY_FLOOR)
@@ -297,12 +326,23 @@ def rank_candidates(
         }
 
     ranked = sorted((score(p) for p in candidates), key=lambda c: c["adjusted"], reverse=True)
+    if len(ranked) > 1:
+        # Same-position tie-break: if a higher-VOR player at the headline's own
+        # position scores within SAME_POSITION_TIEBREAK, he leads instead.
+        top = ranked[0]
+        peers = [c for c in ranked[1:] if c["player"]["position"] == top["player"]["position"] and c["vor"] > top["vor"]]
+        if peers:
+            best = max(peers, key=lambda c: c["vor"])
+            if top["adjusted"] - best["adjusted"] < SAME_POSITION_TIEBREAK:
+                ranked.remove(best)
+                ranked.insert(0, best)
     return ranked[:limit]
 
 
 def headline_and_plan(
     available, needs, roster_size, total_picks, roster_counts=None,
     picks_made=None, gap=None, reach=0, demand=None, limit=SHORTLIST,
+    drafted_positions=None,
 ):
     """The here-and-now shortlist and, between turns, the fallback plan.
 
@@ -312,26 +352,25 @@ def headline_and_plan(
     to the ordinary candidate gate when nobody clears it); empty on the clock.
     """
     args = (available, needs, roster_size, total_picks, roster_counts)
-    now = rank_candidates(*args, picks_made=picks_made, gap=gap, reach_gap=0, demand=demand, limit=limit)
+    kw = {"picks_made": picks_made, "gap": gap, "demand": demand, "limit": limit,
+          "drafted_positions": drafted_positions}
+    now = rank_candidates(*args, reach_gap=0, **kw)
     if not reach:
         return now, []
-    plan = rank_candidates(
-        *args, picks_made=picks_made, gap=gap, reach_gap=reach, demand=demand,
-        limit=limit, min_reach=HEADLINE_REACH,
-    )
+    plan = rank_candidates(*args, reach_gap=reach, min_reach=HEADLINE_REACH, **kw)
     if not plan:
-        plan = rank_candidates(*args, picks_made=picks_made, gap=gap, reach_gap=reach, demand=demand, limit=limit)
+        plan = rank_candidates(*args, reach_gap=reach, **kw)
     return now, plan
 
 
 def recommend_pick(
     available, needs, roster_size, total_picks, roster_counts=None,
-    picks_made=None, gap=None, reach_gap=0, demand=None,
+    picks_made=None, gap=None, reach_gap=0, demand=None, drafted_positions=None,
 ):
     """Return (player, reason): the top of `rank_candidates` with a one-line why."""
     ranked = rank_candidates(
         available, needs, roster_size, total_picks, roster_counts, picks_made, gap, reach_gap,
-        limit=1, demand=demand,
+        limit=1, demand=demand, drafted_positions=drafted_positions,
     )
     if not ranked:
         return None, ""
