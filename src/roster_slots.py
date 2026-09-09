@@ -40,9 +40,12 @@ class SlotAllocation:
     missing: list = field(default_factory=list)
 
 
-def allocate_slots(roster, starters):
-    """Assign roster players to starting slots; best VOR fills dedicated slots first."""
-    remaining = sorted(roster, key=lambda p: p.get("vor", 0), reverse=True)
+def allocate_slots(roster, starters, key="vor"):
+    """Assign roster players to starting slots; the best `key` fills dedicated slots first.
+
+    `key` is season VOR for the draft and this week's points for a lineup.
+    """
+    remaining = sorted(roster, key=lambda p: p.get(key, 0), reverse=True)
     slots = {}
 
     def take(slot, eligible):

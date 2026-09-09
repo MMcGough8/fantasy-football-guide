@@ -85,3 +85,13 @@ def test_allocation_does_not_mutate_inputs():
     before = [dict(p) for p in roster]
     allocate_slots(roster, starters)
     assert roster == before
+
+
+def test_allocate_slots_can_sort_by_another_key():
+    from roster_slots import allocate_slots
+
+    # weekly lineups rank by this week's points, not season VOR
+    roster = [{"position": "RB", "vor": 50, "points": 5}, {"position": "RB", "vor": -5, "points": 10}]
+    slots = allocate_slots(roster, {"RB": 1}, key="points").slots
+    assert slots["RB"][0]["points"] == 10
+    assert allocate_slots(roster, {"RB": 1}).slots["RB"][0]["vor"] == 50

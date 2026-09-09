@@ -1,6 +1,6 @@
 # 🏈 Fantasy Football Command Center
 
-A full-stack Python web application for fantasy football, combining a **value-based draft assistant** with **live in-season tools** powered by your real ESPN league. It blends projections from multiple sources, live league data, and AI-generated analysis into one dark-themed "command center" you can run on draft day and throughout the season.
+A full-stack Python web application for fantasy football, combining a **value-based draft assistant** with a **weekly start/sit page** for your Sleeper leagues. It blends projections from multiple sources, live league data, and AI-generated analysis into one dark-themed "command center" you can run on draft day and throughout the season.
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue)
 ![Streamlit](https://img.shields.io/badge/Streamlit-app-red)
@@ -18,7 +18,7 @@ Most fantasy tools just rank players by projected points — which is misleading
 The app runs in two modes via a sidebar toggle:
 
 - **Draft mode** — a live, value-based draft board with recommendations, tiers, scarcity tracking, consensus rankings, and a draft grader.
-- **In-Season mode** — tools that read your real ESPN league: waiver-wire targets, with start/sit and trade evaluation on the roadmap.
+- **Start/Sit mode** — pick any of your Sleeper leagues and week; the app blends the three feeds' weekly projections, scores them with the league's rules, and shows your current lineup against the best legal one with the point delta per swap, FantasyPros' weekly expert consensus and start/sit grades, injury flags, and coin-flip labels for swaps inside projection noise.
 
 An AI analyst and player-news feature run in both modes.
 
@@ -38,14 +38,14 @@ An AI analyst and player-news feature run in both modes.
 - **Draft grader** — grades your roster on value, completeness, and balance.
 - **Sort toggle** — order the board by VOR, Consensus, or ESPN rank.
 
-### In-Season mode
-- **Live waiver-wire targets** — pulls real free agents from your ESPN league, ranked by projection and roster need, with injury flags.
-- **Start/Sit and Trade Evaluator** — scaffolded, unlocking after the draft (see Roadmap).
+### Start/Sit mode
+- **Current vs optimal lineup** — one row per starting slot (FLEX, SUPER_FLEX and the rest), swaps listed with their projected gain, bench with the reason a player cannot score this week (bye, out, no projection).
+- **Trade Evaluator** — on the roadmap.
 
 ### Both modes
 - **AI player news** — look up any player for a current, fantasy-focused summary sourced across the web (Anthropic Claude API with web search), **with source links** for verification.
 - **AI "Ask the Analyst"** — ask open-ended questions and get answers aware of your league size, scoring, and current roster, using real draft-strategy frameworks (Zero RB, Hero RB, etc.).
-- **Player headshots** on the recommendation card, news panel, and waiver list.
+- **Player headshots** on the recommendation card and news panel.
 
 ## How It Works
 
@@ -66,7 +66,7 @@ For **consensus rankings**, ESPN's published ranks are matched to the board by p
 | Language | Python |
 | Web UI | Streamlit |
 | Projections | Sleeper API (projections, ADP, trending, schedule/byes) |
-| League data | ESPN (`espn-api`) — live roster and free-agent access |
+| League data | Sleeper public API — leagues, rosters, drafts, weekly projections |
 | AI features | Anthropic Claude API (Haiku + Sonnet) with the web search tool |
 | Data parsing | pdfplumber (ESPN cheat-sheet extraction) |
 | HTTP / config | `requests`, `python-dotenv` |
@@ -77,7 +77,7 @@ For **consensus rankings**, ESPN's published ranks are matched to the board by p
 ### Prerequisites
 - Python 3.11+
 - An [Anthropic API key](https://console.anthropic.com) *(for AI news and the analyst; the draft board runs without it)*
-- ESPN cookies *(optional — only for the live in-season tools)*
+- FantasyPros API key *(optional — adds the second projection feed and the weekly expert consensus)*
 
 ### Installation
 
@@ -99,17 +99,11 @@ Create a `.env` file in the project root:
 # For AI news and the analyst
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 
-# For ESPN in-season tools (waivers, live rosters)
-LEAGUE_ID=your_league_id
-YEAR=2026
-ESPN_S2="your_espn_s2_cookie"
-SWID={your-swid-with-braces}
-MY_TEAM_NAME=YourTeamName
+# Optional: second projection feed and weekly expert consensus
+FANTASYPROS_API_KEY=
 ```
 
-> The core draft board runs entirely on the free Sleeper API — **no keys needed** to get started. The Anthropic key powers the AI features; the ESPN cookies power the in-season tools.
->
-> Note: `ESPN_S2` should be wrapped in quotes, since the cookie contains characters that can otherwise break `.env` parsing.
+> The core draft board and the start/sit page run entirely on the free Sleeper API — **no keys needed** to get started. The Anthropic key powers the AI features; the FantasyPros key adds the second feed and weekly consensus.
 
 ### Run
 
@@ -131,22 +125,20 @@ fantasy-football-guide/
 │   ├── categories.py       # draft-insight logic (sleepers, rookies, etc.)
 │   ├── grader.py           # draft grader
 │   ├── news.py             # Claude API news + "Ask the Analyst"
-│   ├── waivers.py          # live ESPN waiver-wire targets
-│   ├── connect.py          # ESPN league connection
+│   ├── weekly_board.py     # one week's projections, blended and league-scored
+│   ├── lineup.py           # current vs optimal lineup, swap list
 │   ├── espn_ranks.py       # consensus rankings + disagreement flags
 │   ├── espn_rankings.json  # extracted ESPN rankings data
 │   ├── extract_espn.py     # PDF → rankings extractor (regenerate as needed)
-│   └── test_cookies.py     # ESPN cookie diagnostic
 ├── requirements.txt
 └── README.md
 ```
 
 ## Roadmap
 
-The in-season side is built out in dependency order — see `IN_SEASON_ROADMAP.md` for the full plan. Highlights:
+Next up, in dependency order:
 
-- **Roster sync** — pull your drafted team from ESPN into the app; the prerequisite that unlocks the rest.
-- **Start/Sit** — weekly lineup calls from projections, matchup, and injury status.
+- **Roster sync** — done: the start/sit page reads your roster and starters straight from Sleeper.
 - **Trade evaluator** — weigh value on each side of a proposed trade.
 - **Rest-of-season rankings**, **player trends**, **matchup analysis**, and **playoff planning** — as live game data accrues through the season.
 
@@ -154,10 +146,10 @@ Some features (strength of schedule, richer start/sit stats) depend on data sour
 
 ## Notes
 
-- Projections, ADP, and schedule data come from the Sleeper public API; live roster and free-agent data from ESPN.
+- Projections, ADP, schedule, league and roster data come from the Sleeper public API; FantasyPros and ESPN add projection feeds and rankings.
 - ESPN consensus rankings are extracted from ESPN's published cheat sheet — a periodic manual refresh via `extract_espn.py`.
 - AI features use the Anthropic Claude API with web search; news results are cached to minimize cost.
-- Secrets (API keys, ESPN cookies) live in a gitignored `.env` file and are never committed.
+- Secrets (API keys) live in a gitignored `.env` file and are never committed.
 
 ---
 

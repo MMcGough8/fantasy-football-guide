@@ -83,8 +83,11 @@ def adp_key_for(scoring, scoring_settings):
     return {"pts_ppr": "adp_ppr", "pts_half_ppr": "adp_half_ppr"}.get(scoring, "adp_std")
 
 
-def fetch_position(position, scoring="pts_ppr", scoring_settings=None, extra_sources=None):
+def fetch_position(position, scoring="pts_ppr", scoring_settings=None, extra_sources=None, week=None):
     """Get all projected players for one position from Sleeper.
+
+    `week` switches from season totals to one NFL week's projections (same record
+    shape, plus the opponent); the blend, rescoring and K/DEF preset path are shared.
 
     With `scoring_settings` (a Sleeper league's scoring map) points are recomputed
     from raw stat projections; otherwise Sleeper's preset total `scoring` is used.
@@ -92,7 +95,7 @@ def fetch_position(position, scoring="pts_ppr", scoring_settings=None, extra_sou
     feeds (FantasyPros, ESPN); the stat lines are combined by `blend_stats`.
     """
     adp_key = adp_key_for(scoring, scoring_settings)
-    url = f"https://api.sleeper.com/projections/nfl/{SEASON}"
+    url = f"https://api.sleeper.com/projections/nfl/{SEASON}" + (f"/{week}" if week else "")
     params = {"season_type": "regular", "position[]": position, "order_by": scoring}
     resp = requests.get(url, params=params, timeout=30)
     resp.raise_for_status()
@@ -138,6 +141,7 @@ def fetch_position(position, scoring="pts_ppr", scoring_settings=None, extra_sou
                 "points": round(points, 1),
                 "points_by_source": points_by_source,
                 "sleeper_updated_at": rec.get("updated_at"),
+                "opponent": rec.get("opponent"),
                 "injury_status": info.get("injury_status"),
                 "injury_body_part": info.get("injury_body_part"),
                 "injury_notes": info.get("injury_notes"),

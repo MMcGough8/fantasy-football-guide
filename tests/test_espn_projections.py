@@ -157,3 +157,39 @@ def test_fp_ranks_join_and_drive_consensus(monkeypatch):
     assert puka["rank_spread"] == 28 and puka["disagreement"] is True
     monkeypatch.setattr(espn_ranks, "_berry_cache", None)
     monkeypatch.setattr(espn_ranks, "_espn_cache", None)
+
+
+@pytest.fixture
+def espn_weekly():
+    from conftest import load_fixture
+
+    return load_fixture("espn_weekly_sample.json")
+
+
+def test_parse_players_picks_the_requested_week_block(espn_weekly):
+    entries = espn_weekly["RB"]["players"]
+    week3 = parse_players(entries, "RB", "2026", week=3)[match_key("Jahmyr Gibbs", "RB")]
+    assert week3["stats"]["rush_yd"] == pytest.approx(88.1) and week3["stats"]["gp"] == 1
+    assert week3["stats"]["pts_ppr"] == pytest.approx(22.4)
+    season = parse_players(entries, "RB", "2026")[match_key("Jahmyr Gibbs", "RB")]
+    assert season["stats"]["pts_ppr"] == pytest.approx(364.9)
+    assert parse_players(entries, "RB", "2026", week=9) == {}
+
+
+def test_fetch_position_requests_a_single_week(monkeypatch, espn_weekly):
+    import json
+
+    seen = {}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        seen["filter"] = json.loads(headers["X-Fantasy-Filter"])["players"]
+        seen["params"] = params
+        return FakeResponse(espn_weekly["RB"])
+
+    monkeypatch.setattr(espn_projections.requests, "get", fake_get)
+    rows = espn_projections.fetch_position("RB", "2026", week=3)
+    assert seen["filter"]["filterStatsForSplitTypeIds"]["value"] == [1]
+    assert seen["filter"]["filterStatsForScoringPeriodIds"]["value"] == [3]
+    assert seen["params"]["scoringPeriodId"] == 3
+    assert rows[match_key("Jahmyr Gibbs", "RB")]["stats"]["pts_ppr"] == pytest.approx(22.4)
+    assert espn_projections.fetch_all("2026", week=3)["projections"]["RB"][match_key("Jahmyr Gibbs", "RB")]["gp"] == 1

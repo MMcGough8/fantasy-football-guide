@@ -66,11 +66,14 @@ def to_sleeper_stats(fp_stats):
     return {STAT_MAP[k]: v for k, v in fp_stats.items() if k in STAT_MAP}
 
 
-def fetch_projections(position, season, api_key):
-    """Return {normalized_name: stats_in_sleeper_keys} for one board position."""
+def fetch_projections(position, season, api_key, week=PRESEASON_WEEK):
+    """Return {normalized_name: stats_in_sleeper_keys} for one board position.
+
+    `week` 0 is the season projection; 1-18 is that week's.
+    """
     if not api_key:
         raise FantasyProsError("FANTASYPROS_API_KEY is not set")
-    params = {"position": FP_POSITIONS[position], "week": PRESEASON_WEEK}
+    params = {"position": FP_POSITIONS[position], "week": week}
     payload = _get_with_retry(f"{BASE_URL}/nfl/{season}/projections", api_key, params)
 
     players = payload.get("players") if isinstance(payload, dict) else None
@@ -91,15 +94,25 @@ def scoring_code_for(scoring_settings):
     return "HALF" if rec >= 0.25 else "STD"
 
 
-def fetch_consensus_rankings(season, api_key, scoring="HALF"):
-    """Expert-consensus draft rankings: {match_key: {rank, std, tier, min, max}}.
+def _parse_rank(p, weekly):
+    entry = {
+        "rank": int(p["rank_ecr"]),
+        "std": float(p.get("rank_std") or 0),
+        "tier": int(p["tier"]) if p.get("tier") is not None else None,
+        "min": int(p["rank_min"]) if p.get("rank_min") is not None else None,
+        "max": int(p["rank_max"]) if p.get("rank_max") is not None else None,
+    }
+    if weekly:
+        # Undocumented but returned for weekly rankings: the experts' start/sit grade and the matchup
+        entry.update(pos_rank=p.get("pos_rank"), grade=p.get("start_sit_grade"), opponent=p.get("player_opponent"))
+    return entry
 
-    rank_std is the spread of the experts' ranks for the player, a measured
-    stand-in for how contested his draft slot is.
-    """
+
+def _fetch_rankings(season, api_key, scoring, week, position, rank_type):
+    """{match_key: rank entry} for one rankings request."""
     if not api_key:
         raise FantasyProsError("FANTASYPROS_API_KEY is not set")
-    params = {"type": "draft", "scoring": scoring, "position": "ALL", "week": PRESEASON_WEEK, "experts": "available"}
+    params = {"type": rank_type, "scoring": scoring, "position": position, "week": week, "experts": "available"}
     payload = _get_with_retry(f"{BASE_URL}/nfl/{season}/consensus-rankings", api_key, params)
     players = payload.get("players") if isinstance(payload, dict) else None
     if players is None:
@@ -110,19 +123,40 @@ def fetch_consensus_rankings(season, api_key, scoring="HALF"):
         if not name or pos is None:
             continue
         try:
-            ranks[match_key(name, pos)] = {
-                "rank": int(p["rank_ecr"]),
-                "std": float(p.get("rank_std") or 0),
-                "tier": int(p["tier"]) if p.get("tier") is not None else None,
-                "min": int(p["rank_min"]) if p.get("rank_min") is not None else None,
-                "max": int(p["rank_max"]) if p.get("rank_max") is not None else None,
-            }
+            ranks[match_key(name, pos)] = _parse_rank(p, weekly=rank_type == "weekly")
         except (TypeError, ValueError):
             continue
     return ranks
 
 
-def fetch_all(season, api_key):
+def fetch_consensus_rankings(season, api_key, scoring="HALF"):
+    """Expert-consensus draft rankings: {match_key: {rank, std, tier, min, max}}.
+
+    rank_std is the spread of the experts' ranks for the player, a measured
+    stand-in for how contested his draft slot is.
+    """
+    return _fetch_rankings(season, api_key, scoring, PRESEASON_WEEK, "ALL", "draft")
+
+
+def fetch_weekly_rankings(season, week, api_key, scoring="PPR"):
+    """Weekly expert consensus for start/sit decisions.
+
+    Returns {"ranks": {match_key: {rank, std, tier, min, max, pos_rank, grade,
+    opponent}}, "missing": [positions]}. One request per position: the ALL
+    request omits the start/sit grade, so it is never worth the shortcut.
+    """
+    ranks, missing = {}, []
+    for pos, fp_pos in FP_POSITIONS.items():
+        try:
+            ranks.update(_fetch_rankings(season, api_key, scoring, week, fp_pos, "weekly"))
+        except FantasyProsError:
+            missing.append(pos)
+    if not ranks:
+        raise FantasyProsError("FantasyPros returned no weekly rankings")
+    return {"ranks": ranks, "missing": missing}
+
+
+def fetch_all(season, api_key, week=PRESEASON_WEEK):
     """Return {"projections": {position: {match_key: stats}}, "missing": [positions]}.
 
     A position that fails is skipped so one bad response does not drop the feed.
@@ -130,7 +164,7 @@ def fetch_all(season, api_key):
     projections, missing = {}, []
     for pos in FP_POSITIONS:
         try:
-            projections[pos] = fetch_projections(pos, season, api_key)
+            projections[pos] = fetch_projections(pos, season, api_key, week=week)
         except FantasyProsError:
             missing.append(pos)
     if not projections:

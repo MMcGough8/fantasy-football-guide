@@ -1,0 +1,12 @@
+{"RB": {"players": [
+  {"id": 4430807, "player": {"fullName": "Jahmyr Gibbs", "defaultPositionId": 2,
+    "draftRanksByRankType": {"PPR": {"rank": 1}}, "ownership": {"averageDraftPosition": 1.5},
+    "stats": [
+      {"seasonId": 2026, "statSourceId": 1, "statSplitTypeId": 0, "scoringPeriodId": 0, "appliedTotal": 364.9,
+       "stats": {"23": 285.0, "24": 1372.6, "25": 14.45, "53": 67.8, "42": 545.9, "72": 1.3, "210": 17}},
+      {"seasonId": 2026, "statSourceId": 1, "statSplitTypeId": 1, "scoringPeriodId": 3, "appliedTotal": 22.4,
+       "stats": {"23": 18.2, "24": 88.1, "25": 0.7, "53": 4.1, "42": 33.0, "72": 0.1, "210": 1}},
+      {"seasonId": 2026, "statSourceId": 1, "statSplitTypeId": 1, "scoringPeriodId": 4, "appliedTotal": 19.0,
+       "stats": {"23": 16.0, "24": 70.0, "25": 0.5, "53": 3.5, "42": 28.0, "72": 0.1, "210": 1}}
+    ]}}
+]}}

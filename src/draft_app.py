@@ -29,6 +29,10 @@ from espn_ranks import match_key
 import sleeper_league
 from sleeper_league import SleeperError
 from draft_state import load_state, save_state
+from lineup import COIN_FLIP_POINTS, current_lineup, expected_points, lineup_diff, lineup_points, optimal_lineup
+from roster_slots import IGNORED_SLOTS, starters_from_roster_positions
+from sleeper_league import find_my_roster, lineup_week
+from weekly_board import attach_weekly_ranks, build_weekly_pool, roster_rows
 from manual_draft import build_draft as build_manual_draft, draft_info as manual_draft_info
 from opponents import demand_multipliers
 from scoring import PRESET_FALLBACK_POSITIONS, scoring_summary, unprojected_bonus_keys
@@ -178,12 +182,6 @@ def sleeper_photo(player_id):
     return f"https://sleepercdn.com/content/nfl/players/{player_id}.jpg"
 
 
-def espn_photo(player_id):
-    if not player_id:
-        return None
-    return f"https://a.espncdn.com/i/headshots/nfl/players/full/{player_id}.png"
-
-
 # A board with a feed missing is cached like any other, but under a retry bucket
 # that rolls every few minutes, so the missing feed is retried on a schedule
 # instead of on every rerun (a down feed would otherwise block every click).
@@ -217,6 +215,9 @@ def refresh_projections():
     load_board.clear()
     load_fantasypros.clear()
     load_espn.clear()
+    load_weekly_pool.clear()
+    load_weekly_fantasypros.clear()
+    load_weekly_espn.clear()
     st.session_state.board_degraded = False
 
 
@@ -268,13 +269,114 @@ def cached_news(name, team, position):
     return get_player_news(name, team, position)
 
 
-@st.cache_data(ttl=600, show_spinner="Pulling free agents from ESPN...")
-def load_waivers():
-    from waivers import get_league, get_waiver_targets
-    import os
+# ---- Start/Sit loaders: same conventions as the board loaders, keyed on the week ----
+NFL_STATE_CACHE_SECONDS = 300
+LINEUP_CACHE_SECONDS = 120
+START_SIT_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".start_sit.json")
 
-    league = get_league()
-    return get_waiver_targets(league, os.getenv("MY_TEAM_NAME", ""), size=40)
+
+def load_start_sit_prefs():
+    """{"username", "league_id"} remembered from the last visit, or {}."""
+    try:
+        with open(START_SIT_FILE) as f:
+            prefs = json.load(f)
+        return prefs if isinstance(prefs, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_start_sit_prefs(username, league_id):
+    try:
+        with open(START_SIT_FILE, "w") as f:
+            json.dump({"username": username, "league_id": league_id}, f)
+    except OSError:
+        pass  # a lost preference is not worth an error on the page
+
+
+@st.cache_data(ttl=NFL_STATE_CACHE_SECONDS, show_spinner=False)
+def load_nfl_state(retry_bucket):
+    try:
+        return {"ok": True, "data": sleeper_league.get_nfl_state()}
+    except SleeperError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@st.cache_data(ttl=600, show_spinner="Finding leagues...")
+def load_my_leagues(username, season):
+    try:
+        user = sleeper_league.get_user(username)
+        leagues = sleeper_league.get_leagues(user["user_id"], season)
+    except SleeperError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "user_id": user["user_id"], "leagues": leagues}
+
+
+@st.cache_data(ttl=LINEUP_CACHE_SECONDS, show_spinner="Loading your roster from Sleeper...")
+def load_lineup_context(league_id, retry_bucket):
+    try:
+        return {
+            "ok": True,
+            "league": sleeper_league.get_league(league_id),
+            "rosters": sleeper_league.get_rosters(league_id),
+        }
+    except SleeperError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading FantasyPros for the week...")
+def load_weekly_fantasypros(season, week, retry_bucket, scoring_code):
+    key = os.getenv("FANTASYPROS_API_KEY", "").strip()
+    try:
+        data = fantasypros.fetch_all(season, key, week=week)
+    except FantasyProsError as e:
+        return {"ok": False, "error": str(e)}
+    try:
+        ranks = fantasypros.fetch_weekly_rankings(season, week, key, scoring_code)
+        data["rankings"] = ranks["ranks"]
+        data["missing"] = list(data["missing"]) + [f"rankings for {p}" for p in ranks["missing"]]
+    except FantasyProsError as e:
+        data["rankings"] = None
+        data["missing"] = list(data["missing"]) + [f"rankings ({e})"]
+    return {"ok": True, "data": data}
+
+
+@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Loading ESPN for the week...")
+def load_weekly_espn(season, week, retry_bucket):
+    try:
+        return {"ok": True, "data": espn_projections.fetch_all(season, week=week)}
+    except EspnError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Building this week's projections...")
+def load_weekly_pool(week, scoring_items, use_fantasypros, retry_bucket):
+    """Returns (pool, note, degraded) for one week, mirroring load_board."""
+    scoring_settings = dict(scoring_items)
+    extra, fp_ranks, problems = {}, None, []
+    if use_fantasypros:
+        fp = load_weekly_fantasypros(SEASON, week, retry_bucket, fantasypros.scoring_code_for(scoring_settings))
+        if fp["ok"]:
+            extra["fp"] = fp["data"]["projections"]
+            fp_ranks = fp["data"]["rankings"]
+            if fp["data"]["missing"]:
+                problems.append("FantasyPros missing " + ", ".join(fp["data"]["missing"]))
+        else:
+            problems.append(f"FantasyPros: {fp['error']}")
+    espn = load_weekly_espn(SEASON, week, retry_bucket)
+    if espn["ok"]:
+        extra["espn"] = espn["data"]["projections"]
+        if espn["data"]["missing"]:
+            problems.append("ESPN missing " + ", ".join(espn["data"]["missing"]))
+    else:
+        problems.append(f"ESPN: {espn['error']}")
+    pool = attach_weekly_ranks(build_weekly_pool(week, scoring_settings, extra), fp_ranks)
+    feeds = ["Sleeper"] + (["FantasyPros"] if "fp" in extra else []) + (["ESPN"] if "espn" in extra else [])
+    note = f"Week {week} projections: " + " + ".join(feeds)
+    if fp_ranks:
+        note += " · FantasyPros weekly consensus"
+    if problems:
+        note += " (" + "; ".join(problems) + ")"
+    return pool, note, bool(problems)
 
 
 def player_key(p):
@@ -428,6 +530,13 @@ if "synced_mine" not in st.session_state:
     st.session_state.synced_mine = []
 if "rosters" not in st.session_state:
     st.session_state.rosters = {}  # a manual draft: household teams other than the active one
+if "ss_username" not in st.session_state:
+    _prefs = load_start_sit_prefs()
+    st.session_state.ss_username = _prefs.get("username", "")
+    st.session_state.ss_league_pref = _prefs.get("league_id")
+    st.session_state.ss_league_options = {}
+    st.session_state.ss_user_id = None
+    st.session_state.ss_week_pref = None
 if "pick_log" not in st.session_state:
     st.session_state.pick_log = []
 if "pos_filter" not in st.session_state:
@@ -730,10 +839,72 @@ with st.sidebar:
         st.markdown("<div class='sec-head'>Mode</div>", unsafe_allow_html=True)
         mode = st.radio(
             "App mode",
-            options=["Draft", "In-Season"],
+            options=["Draft", "Start/Sit"],
             label_visibility="collapsed",
             key="app_mode",
         )
+        st.divider()
+
+    if mode == "Start/Sit":
+        # ---- Which league and week the lineup page reads; never touches the draft connection ----
+        st.markdown("<div class='sec-head'>Start/Sit league</div>", unsafe_allow_html=True)
+
+        def find_ss_leagues(username=None):
+            name = (username or st.session_state.get("ss_username_widget") or "").strip()
+            if not name:
+                return
+            result = load_my_leagues(name, SEASON)
+            if not result["ok"]:
+                st.session_state.ss_error = result["error"]
+                return
+            options = {lg["league_id"]: lg for lg in result["leagues"]}
+            st.session_state.ss_username = name
+            st.session_state.ss_user_id = result["user_id"]
+            st.session_state.ss_league_options = options
+            if st.session_state.ss_league_pref not in options:
+                st.session_state.ss_league_pref = next(iter(options), None)
+            st.session_state.ss_error = None if options else f"No {SEASON} Sleeper leagues for {name}"
+            st.session_state.ss_lookup_done = True
+            save_start_sit_prefs(name, st.session_state.ss_league_pref)
+
+        def pick_ss_league():
+            st.session_state.ss_league_pref = st.session_state.ss_league_widget
+            save_start_sit_prefs(st.session_state.ss_username, st.session_state.ss_league_pref)
+
+        if st.session_state.ss_username and not st.session_state.get("ss_lookup_done"):
+            find_ss_leagues(st.session_state.ss_username)  # remembered from last time
+        st.text_input("Sleeper username", value=st.session_state.ss_username, key="ss_username_widget")
+        st.button("Find leagues", on_click=find_ss_leagues, use_container_width=True)
+        if st.session_state.get("ss_error"):
+            st.error(st.session_state.ss_error)
+        league_ids = list(st.session_state.ss_league_options)
+        if league_ids:
+            st.selectbox(
+                "League",
+                options=league_ids,
+                index=league_ids.index(st.session_state.ss_league_pref) if st.session_state.ss_league_pref in league_ids else 0,
+                format_func=lambda lid: st.session_state.ss_league_options[lid]["name"],
+                key="ss_league_widget",
+                on_change=pick_ss_league,
+            )
+        if st.session_state.ss_week_pref is None:
+            # A failed lookup is retried every minute instead of sitting in the cache for its TTL
+            state = load_nfl_state(int(time.time() // 60) if st.session_state.get("ss_state_failed") else 0)
+            st.session_state.ss_state_failed = not state["ok"]
+            if state["ok"]:
+                st.session_state.ss_week_pref = lineup_week(state["data"])
+            else:
+                st.warning(f"Couldn't read the NFL week from Sleeper ({state['error']}); pick the week below.")
+        st.number_input(
+            "Week",
+            min_value=1,
+            max_value=18,
+            value=int(st.session_state.ss_week_pref or 1),
+            key="ss_week_widget",
+            on_change=lambda: st.session_state.update(ss_week_pref=int(st.session_state.ss_week_widget)),
+        )
+        if st.session_state.get("ss_state_failed") and st.session_state.ss_week_pref is not None:
+            st.caption("Week defaulted while Sleeper was unreachable; check it.")
         st.divider()
 
     # ---- Sleeper League ----
@@ -1029,7 +1200,8 @@ with st.sidebar:
             )
 # ==================== HEADER ====================
 if mode != "Draft":
-    subtitle = "In-season tools · live from your league"
+    ss_pick = st.session_state.ss_league_options.get(st.session_state.ss_league_pref)
+    subtitle = f"Start/Sit · Week {st.session_state.ss_week_pref} · " + (ss_pick["name"] if ss_pick else "pick a league in the sidebar")
 elif league:
     feeds = projection_note.split(",")[0].split(".")[0]
     subtitle = f"{league['name']} · {num_teams} teams · league scoring · {feeds}"
@@ -1775,54 +1947,127 @@ if mode == "Draft":
             )
 
 
-# ==================== IN-SEASON MODE ====================
-if mode == "In-Season":
-    # ---- Waiver Targets (live from ESPN) ----
-    st.markdown(
-        "<div class='sec-head'>Waiver Targets · Live</div>", unsafe_allow_html=True
+# ==================== START/SIT MODE ====================
+def lineup_row_html(slot, row):
+    """One starting slot: who is in it and why the numbers say what they say."""
+    if row is None:
+        return f"<div>{badge(slot)} <span class='rank-num'>empty slot</span></div>"
+    opp = f" <span class='rank-num'>vs {row['opponent']}</span>" if row.get("opponent") else ""
+    fp = ""
+    if row.get("fp_week_pos_rank"):
+        spread = f" ±{row['fp_week_rank_std']:.0f}" if row.get("fp_week_rank_std") else ""
+        grade = f" · {row['fp_grade']}" if row.get("fp_grade") else ""
+        fp = f" <span class='chip'>FP {row['fp_week_pos_rank']}{spread}{grade}</span>"
+    reason = f" <span style='color:#fb923c;font-size:0.78rem'>{row['reason']}</span>" if row.get("reason") else ""
+    split = source_txt(row) if sources_disagree(row) else ""
+    return (
+        f"<div style='margin:3px 0'>{badge(slot)} <span style='color:#ffffff;font-weight:600'>{row['name']}</span>"
+        f" <span class='rank-num'>{row.get('team') or ''}</span>{opp} <span class='mono'>{row['points']:.1f}</span>"
+        f"<span class='rank-num' style='font-size:0.78rem'>{split}</span>{status_badge(row)}{fp}{reason}</div>"
     )
 
-    if st.button("Load waiver targets", type="primary"):
-        try:
-            st.session_state.waivers = load_waivers()
-        except Exception as e:
-            st.session_state.waivers = None
-            st.error(f"Couldn't reach ESPN: {e}")
 
-    if st.session_state.get("waivers"):
-        for i, t in enumerate(st.session_state.waivers[:25], start=1):
-            c = st.columns([0.4, 0.7, 3, 1.3, 1.6, 1.4], vertical_alignment="center")
-            c[0].markdown(f"<span class='rank-num'>{i}</span>", unsafe_allow_html=True)
-            photo = espn_photo(t.get("player_id"))
-            if photo:
-                c[1].image(photo, width=45)
-            name_html = f"<span style='color:#ffffff;font-weight:600;'>{t['name']}</span> <span class='rank-num'>{t['team']}</span>"
-            if t["status"] != "ACTIVE":
-                name_html += f" <span style='color:#fb923c;font-size:0.75rem'>⚠️ {t['status']}</span>"
-            c[2].markdown(name_html, unsafe_allow_html=True)
-            c[3].markdown(badge(t["position"]), unsafe_allow_html=True)
-            c[4].markdown(
-                f"<span class='mono'>proj {t['proj']}</span>", unsafe_allow_html=True
-            )
-            need = (
-                "<span style='color:#34d399;font-size:0.75rem'>★ NEED</span>"
-                if t["fills_need"]
-                else ""
-            )
-            c[5].markdown(need, unsafe_allow_html=True)
+def render_lineup(title, slots):
+    total, playable = lineup_points(slots), expected_points(slots)
+    label = f"{total:.1f}" if playable == total else f"{playable:.1f} <span class='rank-num'>({total:.1f} listed)</span>"
+    st.markdown(f"<div class='sec-head'>{title} · <span class='mono'>{label}</span></div>", unsafe_allow_html=True)
+    for slot, rows in slots.items():
+        for row in rows:
+            st.markdown(lineup_row_html(slot, row), unsafe_allow_html=True)
+    return total
 
-    # ---- Start/Sit (coming after your draft) ----
+
+def render_swap(swap):
+    player, out = swap["in"], swap["out"]
+    if out and swap["out_reason"]:
+        out_txt = f" for <b>{out['name']}</b> <span style='color:#f87171'>({swap['out_reason']})</span>"
+    elif out:
+        out_txt = f" for <b>{out['name']}</b> ({out['points']:.1f})"
+    else:
+        out_txt = " into an empty slot"
+    flip = " <span class='chip' style='color:#fbbf24'>COIN FLIP</span>" if swap["coin_flip"] else ""
+    color = "#00e0a4" if swap["delta"] >= 0 else "#f87171"
+    st.markdown(
+        f"<div style='margin:4px 0'>{badge(swap['slot'])} Start <b>{player['name']}</b> ({player['points']:.1f}){out_txt}"
+        f" · <span class='mono' style='color:{color}'>{swap['delta']:+.1f}</span>{status_badge(player)}{flip}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+if mode == "Start/Sit":
     st.markdown("<div class='sec-head'>Start / Sit</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<span class='rank-num'>Unlocks after your draft — compares your rostered "
-        "players' weekly projections to set your lineup.</span>",
-        unsafe_allow_html=True,
-    )
+    ss_league = st.session_state.ss_league_options.get(st.session_state.ss_league_pref)
+    if not ss_league:
+        st.info("Enter a Sleeper username in the sidebar and pick a league.")
+        st.stop()
+    ctx_retry = int(time.time() // 60) if st.session_state.get("ss_ctx_failed") else 0
+    ctx = load_lineup_context(ss_league["league_id"], ctx_retry)
+    st.session_state.ss_ctx_failed = not ctx["ok"]
+    if not ctx["ok"]:
+        st.error(f"Couldn't load the league from Sleeper: {ctx['error']}")
+        if st.button("Retry"):
+            load_lineup_context.clear()
+            st.rerun()
+        st.stop()
+    ss_retry = int(time.time() // DEGRADED_RETRY_SECONDS) if st.session_state.get("ss_degraded") else 0
+    ss_week = int(st.session_state.ss_week_pref or 1)
+    my_team = find_my_roster(ctx["rosters"], st.session_state.ss_user_id)
+    if my_team is None:
+        st.error(f"{st.session_state.ss_username} has no roster in {ss_league['name']}.")
+        st.stop()
+    roster_positions = ctx["league"].get("roster_positions") or []
+    ss_starters, _ = starters_from_roster_positions(roster_positions)
+    try:
+        pool, ss_note, ss_degraded = load_weekly_pool(
+            ss_week,
+            tuple(sorted((ctx["league"].get("scoring_settings") or {}).items())),
+            bool(os.getenv("FANTASYPROS_API_KEY", "").strip()),
+            ss_retry,
+        )
+    except Exception as e:
+        st.error(f"Couldn't build week {ss_week} projections: {e}")
+        if st.button("Retry"):
+            refresh_projections()
+            st.rerun()
+        st.stop()
+    st.session_state.ss_degraded = ss_degraded
+    byes = {p["team"]: p["bye"] for p in board if p.get("bye")}
+    rows = roster_rows(my_team.get("players") or [], pool, board_by_id, byes, ss_week)
+    rows_by_id = {r["player_id"]: r for r in rows}
+    current = current_lineup(my_team.get("starters") or [], roster_positions, rows_by_id)
+    optimal = optimal_lineup(rows, ss_starters)
+    swaps = lineup_diff(current, optimal)
 
-    # ---- Trade Evaluator (coming after your draft) ----
-    st.markdown("<div class='sec-head'>Trade Evaluator</div>", unsafe_allow_html=True)
-    st.markdown(
-        "<span class='rank-num'>Unlocks after your draft — weighs value on each "
-        "side of a proposed trade.</span>",
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"<span class='rank-num'>{ss_note}. Set the lineup in the Sleeper app; this page only advises.</span>", unsafe_allow_html=True)
+    idp_slots = sorted({s for s in roster_positions if s in IGNORED_SLOTS - {"IR", "TAXI"}})
+    if idp_slots:
+        st.caption("Not modelled here: " + ", ".join(idp_slots))
+    expected_slots = len([s for s in roster_positions if s not in ("BN", "IR", "TAXI")])
+    if len(my_team.get("starters") or []) != expected_slots:
+        st.caption("Sleeper's starter list does not line up with the league's slots; check the current lineup by hand.")
+
+    if swaps:
+        st.markdown("<div class='sec-head'>Swaps</div>", unsafe_allow_html=True)
+        for swap in swaps:
+            render_swap(swap)
+        gain = lineup_points(optimal) - expected_points(current)
+        st.markdown(f"<span class='rank-num'>Total: {gain:+.1f} projected points from the players who can play. Swaps under {COIN_FLIP_POINTS} points are inside projection noise.</span>", unsafe_allow_html=True)
+    else:
+        st.success("Lineup already optimal for this week.")
+
+    left, right = st.columns(2)
+    with left:
+        render_lineup("Current", current)
+    with right:
+        render_lineup("Optimal", optimal)
+
+    st.markdown("<div class='sec-head'>Bench</div>", unsafe_allow_html=True)
+    started = {r["player_id"] for slot_rows in optimal.values() for r in slot_rows if r}
+    for row in sorted((r for r in rows if r["player_id"] not in started), key=lambda r: -r["points"]):
+        st.markdown(lineup_row_html(row["position"], row), unsafe_allow_html=True)
+
+    with st.expander("Per-source points and confidence", expanded=False):
+        for row in sorted(rows, key=lambda r: -r["points"]):
+            by_source = " · ".join(f"{SOURCE_LABELS.get(s, s)} {v}" for s, v in (row.get("points_by_source") or {}).items()) or "no feed"
+            fp = f" · FP {row['fp_week_pos_rank']} (rank {row['fp_week_rank']}, spread ±{row['fp_week_rank_std']:.0f})" if row.get("fp_week_pos_rank") else ""
+            st.markdown(f"<div class='mono' style='font-size:0.82rem'>{row['name']}: {by_source}{fp}</div>", unsafe_allow_html=True)

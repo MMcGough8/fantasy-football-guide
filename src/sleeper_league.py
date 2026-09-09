@@ -25,6 +25,37 @@ def _get(path):
         raise SleeperError(f"Sleeper returned an unexpected response ({e})") from e
 
 
+LAST_WEEK = 18
+
+
+def get_nfl_state():
+    """Sleeper's current NFL season and week ({"season", "week", "season_type", ...})."""
+    state = _get("state/nfl")
+    if not state or state.get("week") is None:
+        raise SleeperError("Sleeper did not report the current NFL week")
+    return state
+
+
+def lineup_week(state):
+    """The week a lineup page opens on: 1 in the preseason, the live week in season, 18 after."""
+    kind = state.get("season_type")
+    if kind == "pre":
+        return 1
+    if kind == "regular":
+        return int(state.get("week") or 1)
+    return LAST_WEEK
+
+
+def find_my_roster(rosters, user_id):
+    """The roster this user owns or co-owns, or None (unclaimed rosters have no owner)."""
+    if not user_id:
+        return None
+    for roster in rosters or []:
+        if roster.get("owner_id") == user_id or user_id in (roster.get("co_owners") or []):
+            return roster
+    return None
+
+
 def get_user(username):
     user = _get(f"user/{username}")
     if not user:

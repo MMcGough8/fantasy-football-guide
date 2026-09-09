@@ -209,3 +209,21 @@ def test_sleeper_undrafted_adp_sentinel_becomes_none(monkeypatch, projections):
     players = fetch_position("RB", "pts_ppr")
     assert next(p for p in players if p["name"] == "Jahmyr Gibbs")["adp"] is None
     assert next(p for p in players if p["name"] == "Bijan Robinson")["adp"] is not None
+
+
+def test_fetch_position_can_ask_for_one_week(monkeypatch):
+    import draft_board
+    from conftest import load_fixture
+
+    weekly = load_fixture("weekly_projections_sample.json")
+    seen = []
+
+    def fake_get(url, params=None, timeout=None):
+        seen.append(url)
+        return FakeResponse(weekly[params["position[]"]])
+
+    monkeypatch.setattr(draft_board.requests, "get", fake_get)
+    rows = draft_board.fetch_position("RB", "pts_ppr", week=3)
+    assert seen[0].endswith("/projections/nfl/2026/3")
+    barkley = next(p for p in rows if p["name"] == "Saquon Barkley")
+    assert barkley["opponent"] == "GB" and barkley["points"] == 19.2

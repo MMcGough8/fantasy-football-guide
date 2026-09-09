@@ -1,0 +1,6 @@
+[
+  {"roster_id": 1, "owner_id": "460869683914993664", "co_owners": null, "league_id": "1400991268770734080",
+   "players": ["4866", "6794", "HOU", "9999", "1234"], "starters": ["4866", "0", "6794", "HOU"], "reserve": null, "taxi": null},
+  {"roster_id": 2, "owner_id": "111111111111111111", "co_owners": ["222222222222222222"], "league_id": "1400991268770734080",
+   "players": ["4034", "7564"], "starters": ["4034", "7564"], "reserve": null, "taxi": null}
+]

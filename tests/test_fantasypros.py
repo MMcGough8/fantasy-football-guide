@@ -162,3 +162,72 @@ def test_scoring_code_follows_reception_value():
     assert scoring_code_for({"rec": 0.4}) == "HALF"
     assert scoring_code_for({"rec": 0.0}) == "STD"
     assert scoring_code_for(None) == "PPR"
+
+
+def test_fetch_projections_sends_the_requested_week(monkeypatch, fp_sample):
+    seen = {}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        seen.update(params)
+        return FakeResponse(fp_sample[params["position"]])
+
+    monkeypatch.setattr(fantasypros.requests, "get", fake_get)
+    fetch_projections("RB", "2026", "test-key", week=3)
+    assert seen["week"] == 3
+    fetch_all("2026", "test-key", week=5)
+    assert seen["week"] == 5
+
+
+@pytest.fixture
+def fp_weekly_rankings():
+    from conftest import load_fixture
+
+    return load_fixture("fantasypros_weekly_rankings_sample.json")
+
+
+def test_weekly_rankings_carry_pos_rank_grade_and_opponent(monkeypatch, fp_weekly_rankings):
+    from fantasypros import fetch_weekly_rankings
+
+    seen = []
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        seen.append(dict(params))
+        wanted = params["position"]
+        return FakeResponse({**fp_weekly_rankings, "players": [p for p in fp_weekly_rankings["players"] if p["player_position_id"] == wanted]})
+
+    monkeypatch.setattr(fantasypros.requests, "get", fake_get)
+    result = fetch_weekly_rankings("2026", 3, "test-key", "PPR")
+    assert [p["position"] for p in seen] == ["QB", "RB", "WR", "TE", "K", "DST"]
+    assert all(p["type"] == "weekly" and p["week"] == 3 and p["scoring"] == "PPR" for p in seen)
+    gibbs = result["ranks"][match_key("Jahmyr Gibbs", "RB")]
+    assert gibbs["rank"] == 1 and gibbs["pos_rank"] == "RB1" and gibbs["std"] == 0.23
+    assert gibbs["grade"] == "A+" and gibbs["opponent"] == "vs. NO"
+    assert result["ranks"][match_key("Houston Texans", "DEF")]["pos_rank"] == "DST3"
+    assert result["missing"] == []
+
+
+def test_weekly_rankings_keep_the_positions_that_answered(monkeypatch, fp_weekly_rankings):
+    from fantasypros import fetch_weekly_rankings
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if params["position"] == "TE":
+            raise requests.ConnectionError("down")
+        return FakeResponse({**fp_weekly_rankings, "players": [p for p in fp_weekly_rankings["players"] if p["player_position_id"] == params["position"]]})
+
+    monkeypatch.setattr(fantasypros.requests, "get", fake_get)
+    monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
+    result = fetch_weekly_rankings("2026", 3, "test-key", "PPR")
+    assert result["ranks"][match_key("Puka Nacua", "WR")]["pos_rank"] == "WR1"
+    assert result["missing"] == ["TE"]
+
+
+def test_weekly_rankings_raise_when_no_position_answers(monkeypatch):
+    from fantasypros import fetch_weekly_rankings
+
+    def boom(*a, **k):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(fantasypros.requests, "get", boom)
+    monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
+    with pytest.raises(FantasyProsError):
+        fetch_weekly_rankings("2026", 3, "test-key", "PPR")

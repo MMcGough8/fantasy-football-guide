@@ -1,0 +1,12 @@
+{"sport": "NFL", "year": "2026", "week": "3", "type": "weekly", "scoring": "PPR", "count": 3, "total_experts": 100, "last_updated": "9/09",
+ "players": [
+  {"player_id": 19236, "player_name": "Jahmyr Gibbs", "player_team_id": "DET", "player_position_id": "RB", "player_positions": "RB", "player_bye_week": "6",
+   "rank_ecr": 1, "pos_rank": "RB1", "tier": null, "rank_min": "1", "rank_max": "3", "rank_ave": "1.04", "rank_std": "0.23",
+   "player_opponent": "vs. NO", "player_opponent_id": "NO", "start_sit_grade": "A+"},
+  {"player_id": 23117, "player_name": "Puka Nacua", "player_team_id": "LAR", "player_position_id": "WR", "player_positions": "WR", "player_bye_week": "11",
+   "rank_ecr": 2, "pos_rank": "WR1", "tier": null, "rank_min": "1", "rank_max": "6", "rank_ave": "2.4", "rank_std": "1.1",
+   "player_opponent": "at SF", "player_opponent_id": "SF", "start_sit_grade": "A"},
+  {"player_id": 8000, "player_name": "Houston Texans", "player_team_id": "HOU", "player_position_id": "DST", "player_positions": "DST", "player_bye_week": "8",
+   "rank_ecr": 40, "pos_rank": "DST3", "tier": null, "rank_min": "30", "rank_max": "55", "rank_ave": "41.0", "rank_std": "6.0",
+   "player_opponent": "vs. IND", "player_opponent_id": "IND", "start_sit_grade": "B+"}
+ ]}

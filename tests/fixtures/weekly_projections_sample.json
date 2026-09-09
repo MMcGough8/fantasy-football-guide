@@ -1,0 +1,23 @@
+{"QB": [
+  {"player_id": "4034", "week": 3, "opponent": "GB", "updated_at": 1, "player": {"first_name": "Patrick", "last_name": "Mahomes", "team": "KC", "position": "QB", "injury_status": "Questionable"},
+   "stats": {"pass_att": 36, "pass_cmp": 24, "pass_yd": 268.5, "pass_td": 2.1, "pass_int": 0.6, "rush_att": 3.5, "rush_yd": 18.0, "rush_td": 0.15, "gp": 1, "pts_ppr": 21.3, "pts_half_ppr": 21.3, "pts_std": 21.3}}
+ ],
+ "RB": [
+  {"player_id": "4866", "week": 3, "opponent": "GB", "updated_at": 1, "player": {"first_name": "Saquon", "last_name": "Barkley", "team": "PHI", "position": "RB", "injury_status": null},
+   "stats": {"rush_att": 18.5, "rush_yd": 85.5, "rush_td": 0.6, "rec": 3.1, "rec_yd": 24.0, "rec_td": 0.1, "fum_lost": 0.05, "gp": 1, "pts_ppr": 19.2, "pts_half_ppr": 17.6, "pts_std": 16.1}},
+  {"player_id": "7564", "week": 3, "opponent": "IND", "updated_at": 1, "player": {"first_name": "Breece", "last_name": "Hall", "team": "NYJ", "position": "RB", "injury_status": "Out"},
+   "stats": {"rush_att": 14.0, "rush_yd": 60.0, "rush_td": 0.4, "rec": 3.0, "rec_yd": 22.0, "rec_td": 0.1, "gp": 1, "pts_ppr": 15.0, "pts_half_ppr": 13.5, "pts_std": 12.0}}
+ ],
+ "WR": [
+  {"player_id": "6794", "week": 3, "opponent": "CHI", "updated_at": 1, "player": {"first_name": "Justin", "last_name": "Jefferson", "team": "MIN", "position": "WR", "injury_status": null},
+   "stats": {"rec": 6.5, "rec_yd": 88.0, "rec_td": 0.55, "rush_att": 0.2, "rush_yd": 1.5, "gp": 1, "pts_ppr": 18.6, "pts_half_ppr": 15.4, "pts_std": 12.1}}
+ ],
+ "TE": [],
+ "K": [
+  {"player_id": "1234K", "week": 3, "opponent": "SEA", "updated_at": 1, "player": {"first_name": "Jason", "last_name": "Myers", "team": "SEA", "position": "K", "injury_status": null},
+   "stats": {"fgm": 1.7, "xpm": 2.4, "gp": 1, "pts_ppr": 8.1, "pts_half_ppr": 8.1, "pts_std": 8.1}}
+ ],
+ "DEF": [
+  {"player_id": "HOU", "week": 3, "opponent": "IND", "updated_at": 1, "player": {"first_name": "Houston", "last_name": "Texans", "team": "HOU", "position": "DEF", "injury_status": null},
+   "stats": {"sack": 2.5, "int": 0.9, "pts_allow": 19.5, "gp": 1, "pts_ppr": 7.5, "pts_half_ppr": 7.5, "pts_std": 7.5}}
+ ]}

@@ -80,3 +80,46 @@ def test_my_roster_id_from_draft_order():
     draft = {"draft_order": {"u1": 1, "me": 3}, "slot_to_roster_id": {"1": 1, "3": 7}}
     assert my_roster_id_from_draft(draft, "me") == 7
     assert my_roster_id_from_draft({"draft_order": None}, "me") is None
+
+
+def test_get_nfl_state_reads_the_current_week(monkeypatch):
+    from conftest import load_fixture
+    from sleeper_league import get_nfl_state
+
+    seen = []
+    monkeypatch.setattr(sleeper_league.requests, "get", lambda url, timeout=None: (seen.append(url), FakeResponse(load_fixture("nfl_state_sample.json")))[1])
+    state = get_nfl_state()
+    assert seen[0].endswith("/state/nfl") and state["week"] == 3 and state["season"] == "2026"
+
+
+def test_get_nfl_state_rejects_an_empty_payload(monkeypatch):
+    from sleeper_league import get_nfl_state
+
+    monkeypatch.setattr(sleeper_league.requests, "get", lambda *a, **k: FakeResponse(None))
+    with pytest.raises(SleeperError):
+        get_nfl_state()
+
+
+def test_lineup_week_maps_season_type_to_a_week():
+    from sleeper_league import lineup_week
+
+    assert lineup_week({"season_type": "pre", "week": 3}) == 1
+    assert lineup_week({"season_type": "regular", "week": 7}) == 7
+    assert lineup_week({"season_type": "post", "week": 1}) == 18
+
+
+def test_find_my_roster_matches_owner_or_co_owner():
+    from conftest import load_fixture
+    from sleeper_league import find_my_roster
+
+    rosters = load_fixture("rosters_sample.json")
+    assert find_my_roster(rosters, ME)["roster_id"] == 1
+    assert find_my_roster(rosters, "222222222222222222")["roster_id"] == 2
+    assert find_my_roster(rosters, "999") is None
+
+
+def test_find_my_roster_never_matches_an_orphan_roster_for_an_unknown_user():
+    from sleeper_league import find_my_roster
+
+    orphan = [{"roster_id": 9, "owner_id": None, "co_owners": None}]
+    assert find_my_roster(orphan, None) is None

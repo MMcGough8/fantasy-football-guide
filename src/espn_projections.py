@@ -10,6 +10,7 @@ TIMEOUT_SECONDS = 30
 PLAYERS_PER_POSITION = 300
 PROJECTION_SOURCE_ID = 1  # statSourceId 0 = actual, 1 = projected
 SEASON_SPLIT_ID = 0  # statSplitTypeId 0 = full season
+WEEK_SPLIT_ID = 1  # statSplitTypeId 1 = one scoring period (week)
 
 # Board position -> ESPN lineup slot id used to filter the request
 SLOT_IDS = {"QB": 0, "RB": 2, "WR": 4, "TE": 6, "K": 17, "DEF": 16}
@@ -45,26 +46,27 @@ class EspnError(Exception):
     """Raised for any failure talking to ESPN, with a user-facing message."""
 
 
-def _season_projection(player, season):
-    """The full-season projection block for `season`. ESPN also ships last
-    season's block first, so never take the first match."""
+def _projection_block(player, season, week=None):
+    """The projection block for `season`: the full-season split, or one week's
+    when `week` is given. ESPN also ships last season's block first, so never
+    take the first match."""
     for s in player.get("stats") or []:
-        if (
-            s.get("statSourceId") == PROJECTION_SOURCE_ID
-            and s.get("statSplitTypeId") == SEASON_SPLIT_ID
-            and str(s.get("seasonId")) == str(season)
-        ):
+        if s.get("statSourceId") != PROJECTION_SOURCE_ID or str(s.get("seasonId")) != str(season):
+            continue
+        if week is None and s.get("statSplitTypeId") == SEASON_SPLIT_ID:
+            return s
+        if week is not None and s.get("statSplitTypeId") == WEEK_SPLIT_ID and s.get("scoringPeriodId") == week:
             return s
     return None
 
 
-def parse_players(entries, position, season):
+def parse_players(entries, position, season, week=None):
     """Return {match_key: {"stats", "espn_rank", "adp"}} for one position."""
     rows = {}
     for entry in entries:
         player = entry.get("player") or {}
         name = player.get("fullName")
-        proj = _season_projection(player, season)
+        proj = _projection_block(player, season, week)
         if not name or proj is None:
             continue
         stats = {
@@ -81,20 +83,24 @@ def parse_players(entries, position, season):
     return rows
 
 
-def fetch_position(position, season):
-    flt = {
-        "players": {
-            "filterSlotIds": {"value": [SLOT_IDS[position]]},
-            "limit": PLAYERS_PER_POSITION,
-            "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
-            "filterStatsForSourceIds": {"value": [PROJECTION_SOURCE_ID]},
-            "filterStatsForSplitTypeIds": {"value": [SEASON_SPLIT_ID]},
-        }
+def fetch_position(position, season, week=None):
+    """One position's projections: the season by default, one week with `week`."""
+    players_filter = {
+        "filterSlotIds": {"value": [SLOT_IDS[position]]},
+        "limit": PLAYERS_PER_POSITION,
+        "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+        "filterStatsForSourceIds": {"value": [PROJECTION_SOURCE_ID]},
+        "filterStatsForSplitTypeIds": {"value": [WEEK_SPLIT_ID if week else SEASON_SPLIT_ID]},
     }
+    params = {"view": "kona_player_info"}
+    if week:
+        players_filter["filterStatsForScoringPeriodIds"] = {"value": [week]}
+        params["scoringPeriodId"] = week
+    flt = {"players": players_filter}
     try:
         resp = requests.get(
             f"{BASE_URL}/{season}/segments/0/leaguedefaults/3",
-            params={"view": "kona_player_info"},
+            params=params,
             headers={"X-Fantasy-Filter": json.dumps(flt)},
             timeout=TIMEOUT_SECONDS,
         )
@@ -107,16 +113,16 @@ def fetch_position(position, season):
     entries = payload.get("players") if isinstance(payload, dict) else None
     if entries is None:
         raise EspnError("ESPN response had no players")
-    return parse_players(entries, position, season)
+    return parse_players(entries, position, season, week)
 
 
-def fetch_all(season):
+def fetch_all(season, week=None):
     """Return {"projections": {position: {key: stats}}, "ranks": {key: espn_rank},
-    "missing": [positions that failed]}."""
+    "missing": [positions that failed]}. `week` selects one week's projections."""
     projections, ranks, missing = {}, {}, []
     for position in SLOT_IDS:
         try:
-            rows = fetch_position(position, season)
+            rows = fetch_position(position, season, week)
         except EspnError:
             missing.append(position)
             continue
