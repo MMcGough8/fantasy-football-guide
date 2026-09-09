@@ -40,6 +40,8 @@ An AI analyst and player-news feature run in both modes.
 
 ### Start/Sit mode
 - **Current vs optimal lineup** — one row per starting slot (FLEX, SUPER_FLEX and the rest), swaps listed with their projected gain, bench with the reason a player cannot score this week (bye, out, no projection).
+- **Matchup adjustment** — each projection is scaled (capped at 12%) by the team's Vegas implied total, home/away, and the opponent's points allowed to the position, all from nflverse's free schedule and weekly stats; the chip on every row shows the line, the implied total, the DvP rank and the factor, and a sidebar toggle turns it off.
+- **Projection accuracy log** — every week's projections are logged locally; one click records the real scores from Sleeper afterward, and the page reports each feed's error so weights and the matchup coefficients can be tuned from evidence.
 - **Trade Evaluator** — on the roadmap.
 
 ### Both modes

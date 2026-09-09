@@ -78,3 +78,8 @@ def test_roster_rows_drop_duplicate_ids():
     pool = {"4866": {"name": "Saquon Barkley", "position": "RB", "team": "PHI", "player_id": "4866", "points": 19.2}}
     rows = roster_rows(["4866", "4866"], pool, {}, {}, 3)
     assert [r["player_id"] for r in rows] == ["4866"]
+
+
+def test_roster_rows_fallback_carries_the_matchup_fields():
+    rows = roster_rows(["9999"], {}, {}, {}, 3)
+    assert rows[0]["adjusted_points"] == 0.0 and rows[0]["matchup"] is None

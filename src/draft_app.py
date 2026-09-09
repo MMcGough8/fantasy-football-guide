@@ -30,6 +30,9 @@ import sleeper_league
 from sleeper_league import SleeperError
 from draft_state import load_state, save_state
 from lineup import COIN_FLIP_POINTS, current_lineup, expected_points, lineup_diff, lineup_points, optimal_lineup, unplayable_starters
+from matchups import MatchupError, attach_matchup, fetch_schedule, team_context
+from dvp import allowed_per_game, blend_seasons, factors, fetch_player_weeks
+from projection_log import LOG_FILE, ActualsError, accuracy_report, fetch_actual_points, is_logged, log_actuals, log_projections, read_records
 from roster_slots import IGNORED_SLOTS, starters_from_roster_positions
 from sleeper_league import find_my_roster, lineup_week
 from weekly_board import attach_weekly_ranks, build_weekly_pool, roster_rows
@@ -218,6 +221,8 @@ def refresh_projections():
     load_weekly_pool.clear()
     load_weekly_fantasypros.clear()
     load_weekly_espn.clear()
+    load_schedule.clear()
+    load_dvp.clear()
     st.session_state.board_degraded = False
 
 
@@ -348,11 +353,39 @@ def load_weekly_espn(season, week, retry_bucket):
         return {"ok": False, "error": str(e)}
 
 
+MATCHUP_CACHE_SECONDS = 6 * 3600  # nflverse refreshes lines and stats on a slow cadence
+
+
+@st.cache_data(ttl=MATCHUP_CACHE_SECONDS, show_spinner="Loading the schedule and Vegas lines...")
+def load_schedule(season, retry_bucket):
+    try:
+        return {"ok": True, "data": fetch_schedule(season)}
+    except MatchupError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@st.cache_data(ttl=MATCHUP_CACHE_SECONDS, show_spinner="Computing defense vs position...")
+def load_dvp(season, retry_bucket):
+    """Last season's points-allowed-by-position as the prior, this season blended in as it lands."""
+    try:
+        prior = factors(allowed_per_game(fetch_player_weeks(str(int(season) - 1))))
+    except MatchupError as e:
+        return {"ok": False, "error": str(e)}
+    note = None
+    try:
+        current = factors(allowed_per_game(fetch_player_weeks(season)))
+    except MatchupError:
+        current, note = {}, f"{season} weekly stats not published yet; DvP uses {int(season) - 1}"
+    return {"ok": True, "data": blend_seasons(prior, current), "note": note}
+
+
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Building this week's projections...")
 def load_weekly_pool(week, scoring_items, use_fantasypros, retry_bucket):
-    """Returns (pool, note, degraded) for one week, mirroring load_board."""
+    """Returns (pool, note, degraded) for one week, mirroring load_board. Informational
+    gaps (no lines posted yet, this season's stats unpublished) are noted but do not
+    count as degraded, so they never trigger the retry cadence."""
     scoring_settings = dict(scoring_items)
-    extra, fp_ranks, problems = {}, None, []
+    extra, fp_ranks, problems, notes = {}, None, [], []
     if use_fantasypros:
         fp = load_weekly_fantasypros(SEASON, week, retry_bucket, fantasypros.scoring_code_for(scoring_settings))
         if fp["ok"]:
@@ -370,12 +403,26 @@ def load_weekly_pool(week, scoring_items, use_fantasypros, retry_bucket):
     else:
         problems.append(f"ESPN: {espn['error']}")
     pool = attach_weekly_ranks(build_weekly_pool(week, scoring_settings, extra), fp_ranks)
+    schedule = load_schedule(SEASON, 0)  # its own 6h TTL; a feed outage must not refetch nflverse
+    context = team_context(schedule["data"], week) if schedule["ok"] else {}
+    if not schedule["ok"]:
+        problems.append(f"schedule: {schedule['error']}")
+    elif not any(c.get("implied") is not None for c in context.values()):
+        notes.append(f"no Vegas lines posted for week {week} yet")
+    dvp_result = load_dvp(SEASON, 0)
+    if not dvp_result["ok"]:
+        problems.append(f"DvP: {dvp_result['error']}")
+    elif dvp_result.get("note"):
+        notes.append(dvp_result["note"])
+    pool = attach_matchup(pool, context, dvp_result["data"] if dvp_result["ok"] else {})
     feeds = ["Sleeper"] + (["FantasyPros"] if "fp" in extra else []) + (["ESPN"] if "espn" in extra else [])
     note = f"Week {week} projections: " + " + ".join(feeds)
     if fp_ranks:
         note += " · FantasyPros weekly consensus"
-    if problems:
-        note += " (" + "; ".join(problems) + ")"
+    if context:
+        note += " · matchups from nflverse lines"
+    if problems or notes:
+        note += " (" + "; ".join(problems + notes) + ")"
     return pool, note, bool(problems)
 
 
@@ -383,7 +430,7 @@ def player_key(p):
     return f"{p['name']}|{p['team']}|{p['position']}"
 
 
-SOURCE_LABELS = {"sleeper": "Sleeper", "fp": "FP", "espn": "ESPN"}
+SOURCE_LABELS = {"sleeper": "Sleeper", "fp": "FP", "espn": "ESPN", "blend": "Blend", "adjusted": "Adjusted"}
 
 
 def fills_need_ui(p):
@@ -537,6 +584,10 @@ if "ss_username" not in st.session_state:
     st.session_state.ss_league_options = {}
     st.session_state.ss_user_id = None
     st.session_state.ss_week_pref = None
+if "ss_adjust_pref" not in st.session_state:
+    st.session_state.ss_adjust_pref = True
+if "ss_logged" not in st.session_state:
+    st.session_state.ss_logged = set()
 if "pick_log" not in st.session_state:
     st.session_state.pick_log = []
 if "pos_filter" not in st.session_state:
@@ -867,8 +918,17 @@ with st.sidebar:
             st.session_state.ss_lookup_done = True
             save_start_sit_prefs(name, st.session_state.ss_league_pref)
 
+        def ss_league_labels():
+            """{label: league_id}; labels are names, made unique with the id when names collide."""
+            options = st.session_state.ss_league_options
+            names = [lg["name"] for lg in options.values()]
+            return {
+                (lg["name"] if names.count(lg["name"]) == 1 else f"{lg['name']} ({lid})"): lid
+                for lid, lg in options.items()
+            }
+
         def pick_ss_league():
-            st.session_state.ss_league_pref = st.session_state.ss_league_widget
+            st.session_state.ss_league_pref = ss_league_labels()[st.session_state.ss_league_widget]
             save_start_sit_prefs(st.session_state.ss_username, st.session_state.ss_league_pref)
 
         if st.session_state.ss_username and not st.session_state.get("ss_lookup_done"):
@@ -877,13 +937,13 @@ with st.sidebar:
         st.button("Find leagues", on_click=find_ss_leagues, use_container_width=True)
         if st.session_state.get("ss_error"):
             st.error(st.session_state.ss_error)
-        league_ids = list(st.session_state.ss_league_options)
-        if league_ids:
+        labels = ss_league_labels()
+        if labels:
+            ids = list(labels.values())
             st.selectbox(
                 "League",
-                options=league_ids,
-                index=league_ids.index(st.session_state.ss_league_pref) if st.session_state.ss_league_pref in league_ids else 0,
-                format_func=lambda lid: st.session_state.ss_league_options[lid]["name"],
+                options=list(labels),
+                index=ids.index(st.session_state.ss_league_pref) if st.session_state.ss_league_pref in ids else 0,
                 key="ss_league_widget",
                 on_change=pick_ss_league,
             )
@@ -905,6 +965,13 @@ with st.sidebar:
         )
         if st.session_state.get("ss_state_failed") and st.session_state.ss_week_pref is not None:
             st.caption("Week defaulted while Sleeper was unreachable; check it.")
+        st.toggle(
+            "Adjust for matchups",
+            value=st.session_state.ss_adjust_pref,
+            key="ss_adjust_widget",
+            on_change=lambda: st.session_state.update(ss_adjust_pref=bool(st.session_state.ss_adjust_widget)),
+            help="Scale each projection by the team's Vegas implied total, home/away and the opponent's points allowed to the position (capped at 12%)",
+        )
         st.divider()
 
     # ---- Sleeper League ----
@@ -1948,11 +2015,31 @@ if mode == "Draft":
 
 
 # ==================== START/SIT MODE ====================
-def lineup_row_html(slot, row):
+def matchup_chip_html(row):
+    """The game context behind a projection: site, opponent, Vegas line, DvP rank, dome."""
+    m = row.get("matchup")
+    if not m:
+        return f" <span class='rank-num'>vs {row['opponent']}</span>" if row.get("opponent") else ""
+    site = {"home": "vs", "away": "@", "neutral": "n"}.get(m.get("site"), "vs")
+    bits = [f"{site} {m.get('opponent')}"]
+    if m.get("total") is not None:
+        bits.append(f"O/U {m['total']:g}")
+    if m.get("implied") is not None:
+        bits.append(f"imp {m['implied']:.1f}")
+    if m.get("dvp_rank"):
+        bits.append(f"vs {row['position']} #{m['dvp_rank']}")
+    if m.get("roof") in ("dome", "closed"):
+        bits.append("indoors")
+    if m.get("factor") and abs(m["factor"] - 1) >= 0.005:
+        bits.append(f"×{m['factor']:.2f}")
+    return f" <span class='chip'>{' · '.join(bits)}</span>"
+
+
+def lineup_row_html(slot, row, key="points"):
     """One starting slot: who is in it and why the numbers say what they say."""
     if row is None:
         return f"<div>{badge(slot)} <span class='rank-num'>empty slot</span></div>"
-    opp = f" <span class='rank-num'>vs {row['opponent']}</span>" if row.get("opponent") else ""
+    opp = matchup_chip_html(row)
     fp = ""
     if row.get("fp_week_pos_rank"):
         spread = f" ±{row['fp_week_rank_std']:.0f}" if row.get("fp_week_rank_std") else ""
@@ -1960,38 +2047,67 @@ def lineup_row_html(slot, row):
         fp = f" <span class='chip'>FP {row['fp_week_pos_rank']}{spread}{grade}</span>"
     reason = f" <span style='color:#fb923c;font-size:0.78rem'>{row['reason']}</span>" if row.get("reason") else ""
     split = source_txt(row) if sources_disagree(row) else ""
+    points_txt = f"{row['points']:.1f}"
+    if key != "points" and row.get(key) is not None and abs(row[key] - row["points"]) >= 0.05:
+        points_txt += f" <span style='color:#00e0a4'>→ {row[key]:.1f}</span>"
     return (
         f"<div style='margin:3px 0'>{badge(slot)} <span style='color:#ffffff;font-weight:600'>{row['name']}</span>"
-        f" <span class='rank-num'>{row.get('team') or ''}</span>{opp} <span class='mono'>{row['points']:.1f}</span>"
+        f" <span class='rank-num'>{row.get('team') or ''}</span>{opp} <span class='mono'>{points_txt}</span>"
         f"<span class='rank-num' style='font-size:0.78rem'>{split}</span>{status_badge(row)}{fp}{reason}</div>"
     )
 
 
-def render_lineup(title, slots):
-    total, playable = lineup_points(slots), expected_points(slots)
+def render_lineup(title, slots, key="points"):
+    total, playable = lineup_points(slots, key), expected_points(slots, key)
     label = f"{total:.1f}" if playable == total else f"{playable:.1f} <span class='rank-num'>({total:.1f} listed)</span>"
     st.markdown(f"<div class='sec-head'>{title} · <span class='mono'>{label}</span></div>", unsafe_allow_html=True)
     for slot, rows in slots.items():
         for row in rows:
-            st.markdown(lineup_row_html(slot, row), unsafe_allow_html=True)
+            st.markdown(lineup_row_html(slot, row, key), unsafe_allow_html=True)
     return total
 
 
-def render_swap(swap):
+def render_swap(swap, key="points"):
     player, out = swap["in"], swap["out"]
     if out and swap["out_reason"]:
         out_txt = f" for <b>{out['name']}</b> <span style='color:#f87171'>({swap['out_reason']})</span>"
     elif out:
-        out_txt = f" for <b>{out['name']}</b> ({out['points']:.1f})"
+        out_txt = f" for <b>{out['name']}</b> ({out.get(key, 0):.1f})"
     else:
         out_txt = " into an empty slot"
     flip = " <span class='chip' style='color:#fbbf24'>COIN FLIP</span>" if swap["coin_flip"] else ""
     color = "#00e0a4" if swap["delta"] >= 0 else "#f87171"
     st.markdown(
-        f"<div style='margin:4px 0'>{badge(swap['slot'])} Start <b>{player['name']}</b> ({player['points']:.1f}){out_txt}"
+        f"<div style='margin:4px 0'>{badge(swap['slot'])} Start <b>{player['name']}</b> ({player.get(key, 0):.1f}){out_txt}"
         f" · <span class='mono' style='color:{color}'>{swap['delta']:+.1f}</span>{status_badge(player)}{flip}</div>",
         unsafe_allow_html=True,
     )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def load_accuracy(path, mtime, size):
+    """The accuracy report, recomputed only when the log file changes."""
+    return accuracy_report(read_records(path))
+
+
+def log_signature(path):
+    try:
+        stat = os.stat(path)
+        return stat.st_mtime, stat.st_size
+    except OSError:
+        return 0, 0
+
+
+def render_accuracy(report):
+    """The projection log's scorecard: MAE and bias per source, and feed weights if earned."""
+    if not report["pairs"]:
+        st.caption("No actuals recorded yet. Record a finished week below to start measuring the feeds.")
+        return
+    st.markdown(f"<span class='rank-num'>{report['pairs']} player-weeks with actuals · {report['unmatched']} logged projections without one</span>", unsafe_allow_html=True)
+    for source, stats in report["overall"].items():
+        st.markdown(f"<div class='mono' style='font-size:0.82rem'>{SOURCE_LABELS.get(source, source):<9} n {stats['n']:>4} · MAE {stats['mae']:>5.2f} · bias {stats['bias']:+.2f}</div>", unsafe_allow_html=True)
+    if report["weights"]:
+        st.markdown("<span class='rank-num'>Suggested feed weights from inverse error: " + ", ".join(f"{SOURCE_LABELS.get(s, s)} {w:.2f}" for s, w in report["weights"].items()) + "</span>", unsafe_allow_html=True)
 
 
 if mode == "Start/Sit":
@@ -2034,9 +2150,18 @@ if mode == "Start/Sit":
     byes = {p["team"]: p["bye"] for p in board if p.get("bye")}
     rows = roster_rows(my_team.get("players") or [], pool, board_by_id, byes, ss_week)
     rows_by_id = {r["player_id"]: r for r in rows}
+    ss_key = "adjusted_points" if st.session_state.ss_adjust_pref else "points"
     current = current_lineup(my_team.get("starters") or [], roster_positions, rows_by_id)
-    optimal = optimal_lineup(rows, ss_starters)
-    swaps = lineup_diff(current, optimal)
+    optimal = optimal_lineup(rows, ss_starters, key=ss_key)
+    swaps = lineup_diff(current, optimal, key=ss_key)
+    ss_scoring = ctx["league"].get("scoring_settings") or {}
+    log_slot = (SEASON, ss_week, ss_league["league_id"])
+    if log_slot not in st.session_state.ss_logged:
+        try:
+            log_projections(LOG_FILE, SEASON, ss_week, ss_league["league_id"], fantasypros.scoring_code_for(ss_scoring), pool)
+        except OSError as e:
+            st.caption(f"Projection log not written: {e}")
+        st.session_state.ss_logged.add(log_slot)
 
     st.markdown(f"<span class='rank-num'>{ss_note}. Set the lineup in the Sleeper app; this page only advises.</span>", unsafe_allow_html=True)
     idp_slots = sorted({s for s in roster_positions if s in IGNORED_SLOTS - {"IR", "TAXI"}})
@@ -2053,25 +2178,60 @@ if mode == "Start/Sit":
     if swaps:
         st.markdown("<div class='sec-head'>Swaps</div>", unsafe_allow_html=True)
         for swap in swaps:
-            render_swap(swap)
-        gain = lineup_points(optimal) - expected_points(current)
+            render_swap(swap, ss_key)
+        gain = lineup_points(optimal, ss_key) - expected_points(current, ss_key)
         st.markdown(f"<span class='rank-num'>Total: {gain:+.1f} projected points from the players who can play. Swaps under {COIN_FLIP_POINTS} points are inside projection noise.</span>", unsafe_allow_html=True)
     else:
         st.success("Lineup already optimal for this week.")
 
     left, right = st.columns(2)
     with left:
-        render_lineup("Current", current)
+        render_lineup("Current", current, ss_key)
     with right:
-        render_lineup("Optimal", optimal)
+        render_lineup("Optimal", optimal, ss_key)
 
     st.markdown("<div class='sec-head'>Bench</div>", unsafe_allow_html=True)
     started = {r["player_id"] for slot_rows in optimal.values() for r in slot_rows if r}
-    for row in sorted((r for r in rows if r["player_id"] not in started), key=lambda r: -r["points"]):
-        st.markdown(lineup_row_html(row["position"], row), unsafe_allow_html=True)
+    for row in sorted((r for r in rows if r["player_id"] not in started), key=lambda r: -r.get(ss_key, 0)):
+        st.markdown(lineup_row_html(row["position"], row, ss_key), unsafe_allow_html=True)
 
     with st.expander("Per-source points and confidence", expanded=False):
         for row in sorted(rows, key=lambda r: -r["points"]):
             by_source = " · ".join(f"{SOURCE_LABELS.get(s, s)} {v}" for s, v in (row.get("points_by_source") or {}).items()) or "no feed"
             fp = f" · FP {row['fp_week_pos_rank']} (rank {row['fp_week_rank']}, spread ±{row['fp_week_rank_std']:.0f})" if row.get("fp_week_pos_rank") else ""
             st.markdown(f"<div class='mono' style='font-size:0.82rem'>{row['name']}: {by_source}{fp}</div>", unsafe_allow_html=True)
+
+    with st.expander("Matchups and accuracy", expanded=False):
+        schedule = load_schedule(SEASON, 0)
+        week_context = team_context(schedule["data"], ss_week) if schedule["ok"] else {}
+        with_lines = sorted((c for c in week_context.items() if c[1].get("implied") is not None), key=lambda kv: -kv[1]["implied"])
+        if with_lines:
+            st.markdown("<div class='sec-head'>Implied team totals</div>", unsafe_allow_html=True)
+            st.markdown("<div class='mono' style='font-size:0.82rem'>" + "<br>".join(
+                f"{team:<4} {c['implied']:>5.1f}  {'vs' if c['site'] == 'home' else '@' if c['site'] == 'away' else 'n'} {c['opponent']} · O/U {c['total']:g} · spread {c['spread']:+g}"
+                for team, c in with_lines) + "</div>", unsafe_allow_html=True)
+        else:
+            st.caption(f"No Vegas lines posted for week {ss_week} yet; the adjustment uses DvP and site only.")
+        dvp_lines = [
+            f"{r['name']} {r['matchup']['site']} {r['matchup']['opponent']}: {r['position']} allowed rank #{r['matchup']['dvp_rank']} (×{r['matchup']['dvp_factor']:.2f} of average)"
+            for r in rows if r.get("matchup") and r["matchup"].get("dvp_rank")
+        ]
+        if dvp_lines:
+            st.markdown("<div class='sec-head'>Defense vs position (1 = stingiest)</div>", unsafe_allow_html=True)
+            st.markdown("<div class='mono' style='font-size:0.82rem'>" + "<br>".join(dvp_lines) + "</div>", unsafe_allow_html=True)
+        st.markdown("<div class='sec-head'>Projection accuracy</div>", unsafe_allow_html=True)
+        log_records = read_records(LOG_FILE)
+        render_accuracy(load_accuracy(LOG_FILE, *log_signature(LOG_FILE)))
+        # Only weeks that have been played can be recorded; the live NFL week is the gate
+        nfl_now = load_nfl_state(0)
+        live_week = lineup_week(nfl_now["data"]) if nfl_now["ok"] else 1
+        previous = ss_week - 1
+        already = is_logged(log_records, "actual", SEASON, previous, ss_league["league_id"])
+        label = f"{'Re-record' if already else 'Record'} week {previous} actuals"
+        if st.button(label, disabled=previous < 1 or previous >= live_week, help="Fetch that week's real scores from Sleeper and add them to the log (only finished weeks)"):
+            try:
+                actuals = fetch_actual_points(SEASON, previous, ss_scoring)
+                written = log_actuals(LOG_FILE, SEASON, previous, ss_league["league_id"], actuals, force=already)
+                st.success(f"Recorded {written} actuals for week {previous}.")
+            except (ActualsError, OSError) as e:
+                st.error(str(e))

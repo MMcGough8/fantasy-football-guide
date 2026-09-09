@@ -1,0 +1,9 @@
+{"QB": [], "WR": [], "TE": [],
+ "RB": [{"player_id": "4866", "week": 3, "season": "2026", "opponent": "GB", "team": "PHI", "player": {"first_name": "Saquon", "last_name": "Barkley", "position": "RB", "team": "PHI"},
+         "stats": {"rush_att": 22, "rush_yd": 100, "rush_td": 1, "rec": 5, "rec_tgt": 6, "rec_yd": 40, "gp": 1, "off_snp": 55, "tm_off_snp": 62, "pts_ppr": 26.0, "pts_half_ppr": 23.5, "pts_std": 21.0}},
+        {"player_id": "7564", "week": 3, "season": "2026", "opponent": "IND", "team": "NYJ", "player": {"first_name": "Breece", "last_name": "Hall", "position": "RB", "team": "NYJ"},
+         "stats": {"gp": 0, "pts_ppr": 0, "pts_half_ppr": 0, "pts_std": 0}}],
+ "K": [{"player_id": "1234K", "week": 3, "season": "2026", "opponent": "SEA", "team": "SEA", "player": {"first_name": "Jason", "last_name": "Myers", "position": "K", "team": "SEA"},
+        "stats": {"fgm": 2, "xpm": 1, "gp": 1, "pts_ppr": 7.0, "pts_half_ppr": 7.0, "pts_std": 7.0}}],
+ "DEF": [{"player_id": "HOU", "week": 3, "season": "2026", "opponent": "IND", "team": "HOU", "player": {"first_name": "Houston", "last_name": "Texans", "position": "DEF", "team": "HOU"},
+          "stats": {"sack": 3, "int": 1, "pts_allow": 17, "gp": 1, "pts_ppr": 9.0, "pts_half_ppr": 9.0, "pts_std": 9.0}}]}

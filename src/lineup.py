@@ -45,20 +45,21 @@ def current_lineup(starter_ids, roster_positions, rows_by_id):
     return lineup
 
 
-def optimal_lineup(rows, starters):
-    """The best legal lineup by this week's points; slots nobody can fill hold None."""
-    slots = allocate_slots(startable(rows), starters, key="points").slots
+def optimal_lineup(rows, starters, key="points"):
+    """The best legal lineup by `key` (this week's points, or the matchup-adjusted
+    points); slots nobody can fill hold None."""
+    slots = allocate_slots(startable(rows), starters, key=key).slots
     return {slot: rows + [None] * (starters[slot] - len(rows)) for slot, rows in slots.items()}
 
 
-def lineup_points(slots):
-    """Projected points of the players listed, whether or not they can play."""
-    return round(sum(r["points"] for rows in slots.values() for r in rows if r), 1)
+def lineup_points(slots, key="points"):
+    """Points of the players listed, whether or not they can play."""
+    return round(sum(r.get(key, 0) for rows in slots.values() for r in rows if r), 1)
 
 
-def expected_points(slots):
-    """Projected points from the players who can actually play this week."""
-    return round(sum(r["points"] for rows in slots.values() for r in rows if r and can_play(r)), 1)
+def expected_points(slots, key="points"):
+    """Points from the players who can actually play this week."""
+    return round(sum(r.get(key, 0) for rows in slots.values() for r in rows if r and can_play(r)), 1)
 
 
 def unplayable_starters(current):
@@ -70,8 +71,8 @@ def _player_ids(slots):
     return {r["player_id"] for rows in slots.values() for r in rows if r}
 
 
-def lineup_diff(current, optimal):
-    """The swaps that turn `current` into `optimal`.
+def lineup_diff(current, optimal, key="points"):
+    """The swaps that turn `current` into `optimal`, valued by `key`.
 
     Each incoming player is paired with an outgoing one at the same position when
     there is one, otherwise with the lowest-scoring outgoing player who could have
@@ -82,11 +83,11 @@ def lineup_diff(current, optimal):
     current_ids, optimal_ids = _player_ids(current), _player_ids(optimal)
     incoming = sorted(
         ((slot, r) for slot, rows in optimal.items() for r in rows if r and r["player_id"] not in current_ids),
-        key=lambda pair: -pair[1]["points"],
+        key=lambda pair: -pair[1].get(key, 0),
     )
     outgoing = sorted(
         (r for rows in current.values() for r in rows if r and r["player_id"] not in optimal_ids),
-        key=lambda r: r["points"] if can_play(r) else 0,
+        key=lambda r: r.get(key, 0) if can_play(r) else 0,
     )
     swaps = []
     for slot, player in incoming:
@@ -96,8 +97,8 @@ def lineup_diff(current, optimal):
             out = next((o for o in outgoing if o["position"] in eligible), None)
         if out is not None:
             outgoing.remove(out)
-        out_points = out["points"] if out and can_play(out) else 0
-        delta = round(player["points"] - out_points, 1)
+        out_points = out.get(key, 0) if out and can_play(out) else 0
+        delta = round(player.get(key, 0) - out_points, 1)
         swaps.append({
             "slot": slot,
             "in": player,

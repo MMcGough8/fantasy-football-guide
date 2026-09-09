@@ -59,8 +59,13 @@ def unprojected_bonus_keys(scoring_settings):
     return sorted(k for k, w in scoring_settings.items() if w and LONG_TD_BONUS.match(k))
 
 
-def score_stats(stats, scoring_settings, position):
-    """Return projected points under `scoring_settings`, or None if no settings."""
+def score_stats(stats, scoring_settings, position, estimate_bonuses=True):
+    """Return points under `scoring_settings`, or None if no settings.
+
+    `estimate_bonuses` adds the expected per-game threshold bonuses from season
+    totals; turn it off for a real game's stats, where the bonus either happened
+    (Sleeper reports it as its own key) or did not.
+    """
     if not scoring_settings:
         return None
     if position in PRESET_FALLBACK_POSITIONS:
@@ -70,7 +75,8 @@ def score_stats(stats, scoring_settings, position):
         weight = scoring_settings.get(stat)
         if weight and value:
             total += value * weight
-    total += sum(estimate_threshold_bonuses(stats, scoring_settings).values())
+    if estimate_bonuses:
+        total += sum(estimate_threshold_bonuses(stats, scoring_settings).values())
     return round(total, 1)
 
 

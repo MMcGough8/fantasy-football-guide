@@ -93,3 +93,13 @@ def test_games_played_is_capped_at_a_real_season(league):
     eighteen = estimate_threshold_bonuses({"rush_yd": 1700, "gp": 18}, league["scoring_settings"])
     seventeen = estimate_threshold_bonuses({"rush_yd": 1700, "gp": 17}, league["scoring_settings"])
     assert eighteen == seventeen
+
+
+def test_score_stats_can_skip_the_bonus_estimate_for_actual_game_stats():
+    from scoring import score_stats
+
+    settings = {"rush_yd": 0.1, "bonus_rush_yd_100": 2.0}
+    game = {"rush_yd": 100, "gp": 1}
+    assert score_stats(game, settings, "RB", estimate_bonuses=False) == 10.0
+    assert score_stats(game, settings, "RB") > 10.0  # the season path still estimates
+    assert score_stats({"rush_yd": 100, "bonus_rush_yd_100": 1, "gp": 1}, settings, "RB", estimate_bonuses=False) == 12.0

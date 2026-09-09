@@ -74,6 +74,8 @@ def roster_rows(player_ids, pool, season_index, byes, week):
             "points_by_source": {},
             "sources": 0,
             "opponent": None,
+            "adjusted_points": 0.0,
+            "matchup": None,
             "reason": BYE if on_bye else NO_PROJECTION,
         })
     return rows

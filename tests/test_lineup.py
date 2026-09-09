@@ -91,3 +91,16 @@ def test_unplayable_starters_lists_current_starters_who_cannot_play():
 
     cur = {"RB": [_row("1", "RB", 14.0, "Out"), _row("2", "RB", 10.0)], "WR": [_row("3", "WR", 9.0, None, "bye"), None]}
     assert [(r["player_id"], reason) for r, reason in unplayable_starters(cur)] == [("1", "Out"), ("3", "bye")]
+
+
+def test_lineup_functions_can_rank_by_another_key():
+    a = dict(_row("1", "RB", 10.0), adjusted_points=8.0)
+    b = dict(_row("2", "RB", 9.0), adjusted_points=11.0)
+    slots = optimal_lineup([a, b], {"RB": 1}, key="adjusted_points")
+    assert slots["RB"][0]["player_id"] == "2"
+    assert lineup_points(slots, key="adjusted_points") == 11.0 and lineup_points(slots) == 9.0
+    swaps = lineup_diff({"RB": [a]}, slots, key="adjusted_points")
+    assert swaps[0]["delta"] == 3.0
+    from lineup import expected_points
+
+    assert expected_points(slots, key="adjusted_points") == 11.0

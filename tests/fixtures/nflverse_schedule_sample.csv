@@ -1,0 +1,8 @@
+game_id,season,game_type,week,gameday,gametime,away_team,home_team,location,spread_line,total_line,roof,surface
+2026_01_NE_SEA,2026,REG,1,2026-09-09,20:15,NE,SEA,Home,3,44.5,outdoors,fieldturf
+2026_01_SF_LA,2026,REG,1,2026-09-10,20:15,SF,LA,Neutral,3.5,48.5,dome,grass
+2026_01_CHI_CAR,2026,REG,1,2026-09-13,13:00,CHI,CAR,Home,-3,46.5,outdoors,grass
+2026_01_TB_CIN,2026,REG,1,2026-09-13,13:00,TB,CIN,Home,,,outdoors,grass
+2026_02_SEA_KC,2026,REG,2,2026-09-20,16:25,SEA,KC,Home,-2.5,50.5,,grass
+2025_01_DAL_PHI,2025,REG,1,2025-09-04,20:20,DAL,PHI,Home,7,47.5,outdoors,grass
+2026_19_NE_SEA,2026,POST,19,2027-01-10,13:00,NE,SEA,Home,1,41.5,outdoors,fieldturf

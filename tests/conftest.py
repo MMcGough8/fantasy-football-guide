@@ -33,3 +33,9 @@ def projections():
 @pytest.fixture
 def picks():
     return load_fixture("picks_sample.json")
+
+
+def load_text(name):
+    """A text fixture (CSV) as a string."""
+    with open(os.path.join(FIXTURES, name)) as f:
+        return f.read()

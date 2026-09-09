@@ -1,0 +1,13 @@
+season,week,season_type,player_id,player_name,position,team,opponent_team,fantasy_points,fantasy_points_ppr
+2025,1,REG,00-0001,Back One,RB,DET,GB,8.0,10.0
+2025,1,REG,00-0002,Back Two,RB,DET,GB,6.0,8.0
+2025,2,REG,00-0003,Back Three,RB,MIN,GB,10.0,12.0
+2025,1,REG,00-0004,Back Four,RB,DAL,CHI,26.0,30.0
+2025,1,REG,00-0005,Wide One,WR,DET,GB,12.0,15.0
+2025,1,REG,00-0006,Wide Two,WR,DAL,CHI,20.0,25.0
+2025,1,REG,00-0007,Wide Three,WR,SEA,LA,9.0,11.0
+2025,1,REG,00-0008,Tight One,TE,DET,GB,4.0,6.0
+2025,1,REG,00-0009,Quarter One,QB,DET,GB,18.0,18.0
+2025,1,REG,00-0010,Kick One,K,DET,GB,7.0,7.0
+2025,1,REG,00-0011,Back Blank,RB,DET,GB,,
+2025,19,POST,00-0012,Back Post,RB,DET,GB,40.0,44.0
