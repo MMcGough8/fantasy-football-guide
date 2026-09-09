@@ -29,6 +29,7 @@ from espn_ranks import match_key
 import sleeper_league
 from sleeper_league import SleeperError
 from draft_state import load_state, save_state
+from manual_draft import build_draft as build_manual_draft, draft_info as manual_draft_info
 from opponents import demand_multipliers
 from scoring import PRESET_FALLBACK_POSITIONS, scoring_summary, unprojected_bonus_keys
 import fantasypros
@@ -305,16 +306,33 @@ def source_txt(p):
     return " (" + " · ".join(f"{SOURCE_LABELS.get(s, s)} {v}" for s, v in by_source.items()) + ")"
 
 
+def state_draft_id():
+    """What the persisted marks are keyed to, so a new draft always starts clean."""
+    league = st.session_state.get("league") or {}
+    if league.get("manual_draft"):
+        return f"manual:{league.get('league_id') or league.get('name')}"
+    return st.session_state.get("rehearsal_draft_id") or league.get("draft_id") or "manual"
+
+
+def all_rosters():
+    """Every household team's roster keys; the active team's roster lives in my_roster."""
+    rosters = {t: [player_key(p) for p in ps] for t, ps in st.session_state.rosters.items()}
+    active = st.session_state.get("team_pref")
+    if active:
+        rosters[active] = [player_key(p) for p in st.session_state.my_roster]
+    return rosters
+
+
 def persist_marks():
     """Manual marks survive a refresh; keyed to the draft so a new draft starts clean."""
-    league = st.session_state.get("league") or {}
-    draft_id = st.session_state.get("rehearsal_draft_id") or league.get("draft_id") or "manual"
     try:
         save_state(
             STATE_FILE,
-            draft_id,
+            state_draft_id(),
             drafted=st.session_state.drafted,
             mine=[player_key(p) for p in st.session_state.my_roster],
+            rosters=all_rosters(),
+            pick_log=st.session_state.pick_log,
         )
     except OSError:
         pass  # losing persistence is not worth interrupting a live draft
@@ -325,6 +343,10 @@ def draft_player(p, mine):
     if mine:
         st.session_state.my_roster = st.session_state.my_roster + [p]
     st.session_state.last_mark = {"key": player_key(p), "name": p["name"], "mine": mine}
+    # The ordered log is the pick count (and draft position) of a manual draft
+    st.session_state.pick_log = st.session_state.pick_log + [
+        {"key": player_key(p), "team": st.session_state.get("team_pref") if mine else None}
+    ]
     persist_marks()
 
 
@@ -336,6 +358,12 @@ def undo_last_mark():
     st.session_state.my_roster = [
         p for p in st.session_state.my_roster if player_key(p) != mark["key"]
     ]
+    st.session_state.rosters = {
+        t: [p for p in ps if player_key(p) != mark["key"]] for t, ps in st.session_state.rosters.items()
+    }
+    log = st.session_state.pick_log
+    if log and log[-1]["key"] == mark["key"]:
+        st.session_state.pick_log = log[:-1]
     st.session_state.quick_msg = f"↩ Undid: {mark['name']}"
     persist_marks()
 
@@ -344,6 +372,8 @@ def reset_draft():
     st.session_state.pop("last_mark", None)
     st.session_state.drafted = set()
     st.session_state.my_roster = []
+    st.session_state.rosters = {}
+    st.session_state.pick_log = []
     st.session_state.synced_taken = set()
     st.session_state.synced_mine = []
     st.session_state.draft_info = None
@@ -396,6 +426,10 @@ if "synced_taken" not in st.session_state:
     st.session_state.synced_taken = set()
 if "synced_mine" not in st.session_state:
     st.session_state.synced_mine = []
+if "rosters" not in st.session_state:
+    st.session_state.rosters = {}  # a manual draft: household teams other than the active one
+if "pick_log" not in st.session_state:
+    st.session_state.pick_log = []
 if "pos_filter" not in st.session_state:
     st.session_state.pos_filter = "All"
 if "league" not in st.session_state:
@@ -434,6 +468,14 @@ else:
     scoring_items = None
     scoring_label = st.session_state.scoring_pref
 
+# ---- Manual draft (Yahoo/ESPN): no sync, a hand-kept pick log, one or more household teams ----
+manual_cfg = (league or {}).get("manual_draft") or None
+team_names = list(manual_cfg["slots"]) if manual_cfg else []
+if team_names and st.session_state.get("team_pref") not in team_names:
+    st.session_state.team_pref = team_names[0]
+active_team = st.session_state.get("team_pref") if manual_cfg else None
+mine_label = active_team if manual_cfg else "Mine"
+
 # While a feed is missing the cache key rolls every DEGRADED_RETRY_SECONDS so it retries
 retry_bucket = (
     int(time.time() // DEGRADED_RETRY_SECONDS) if st.session_state.get("board_degraded") else 0
@@ -464,11 +506,19 @@ board_by_id = index_board_by_player_id(board)
 
 if not st.session_state.get("marks_restored"):
     st.session_state.marks_restored = True
-    saved = load_state(STATE_FILE, (league or {}).get("draft_id") or "manual")
+    saved = load_state(STATE_FILE, state_draft_id())
     if saved:
         by_key = {player_key(p): p for p in board}
         st.session_state.drafted = saved["drafted"]
-        st.session_state.my_roster = [by_key[k] for k in saved["mine"] if k in by_key]
+        st.session_state.pick_log = saved["pick_log"]
+        if saved["rosters"] and active_team:
+            st.session_state.my_roster = [by_key[k] for k in saved["rosters"].get(active_team, []) if k in by_key]
+            st.session_state.rosters = {
+                t: [by_key[k] for k in keys if k in by_key]
+                for t, keys in saved["rosters"].items() if t != active_team
+            }
+        else:
+            st.session_state.my_roster = [by_key[k] for k in saved["mine"] if k in by_key]
 
 sleeper_stamp = max(((p.get("sleeper_updated_at") or 0) for p in board), default=0)
 hours_old = (time.time() - sleeper_stamp / 1000) / 3600 if sleeper_stamp else None
@@ -577,6 +627,20 @@ if league and league.get("draft_id") and st.session_state.pop("sync_requested", 
         st.session_state.sync_error = True
 
 
+if manual_cfg:
+    # No platform sync: the hand-kept pick log is the draft, rebuilt every run (cheap).
+    _by_key = {player_key(p): p for p in board}
+    try:
+        st.session_state.draft_info = manual_draft_info(
+            build_manual_draft(manual_cfg["teams"], manual_cfg["rounds"], manual_cfg["slots"]),
+            st.session_state.pick_log,
+            active_team,
+            lambda k: (_by_key.get(k) or {}).get("position"),
+        )
+    except ValueError as e:
+        st.session_state.draft_info = None
+        st.error(f"Draft slots are not set up right: {e}")
+
 # Synced picks are the truth from Sleeper; manual Mine/Taken marks layer on top.
 synced_taken = st.session_state.synced_taken
 drafted_keys = st.session_state.drafted | synced_taken
@@ -617,6 +681,47 @@ with st.sidebar:
     )
     compact = {"Auto": compact_auto, "Wide": False, "Compact": True}[st.session_state.layout_pref]
 
+    if manual_cfg:
+        # ---- Which household team the card, needs and roster panel follow ----
+        st.markdown("<div class='sec-head'>Drafting for</div>", unsafe_allow_html=True)
+
+        def switch_team():
+            new, old = st.session_state.team_widget, st.session_state.team_pref
+            if new == old:
+                return
+            rosters = dict(st.session_state.rosters)
+            rosters[old] = st.session_state.my_roster
+            st.session_state.my_roster = rosters.pop(new, [])
+            st.session_state.rosters = rosters
+            st.session_state.team_pref = new
+
+        def update_slot(name):
+            lg = st.session_state.league
+            slots = {**lg["manual_draft"]["slots"], name: int(st.session_state[f"slot_{name}"])}
+            st.session_state.league = {**lg, "manual_draft": {**lg["manual_draft"], "slots": slots}}
+            save_league(st.session_state.league)
+
+        st.radio(
+            "Drafting for",
+            options=team_names,
+            index=team_names.index(active_team),
+            horizontal=True,
+            key="team_widget",
+            on_change=switch_team,
+            label_visibility="collapsed",
+        )
+        with st.expander("Draft slots", expanded=False):
+            for name in team_names:
+                st.number_input(
+                    f"{name} picks",
+                    min_value=1,
+                    max_value=int(manual_cfg["teams"]),
+                    value=int(manual_cfg["slots"][name]),
+                    key=f"slot_{name}",
+                    on_change=update_slot,
+                    args=(name,),
+                )
+
     # ---- Mode toggle (top); hidden while a draft is live so it cannot be bumped ----
     draft_live = (st.session_state.draft_info or {}).get("status") == "drafting"
     if draft_live:
@@ -632,7 +737,10 @@ with st.sidebar:
         st.divider()
 
     # ---- Sleeper League ----
-    st.markdown("<div class='sec-head'>Sleeper League</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='sec-head'>{(league or {}).get('platform', 'Sleeper')} League</div>",
+        unsafe_allow_html=True,
+    )
     if league:
         slot_text = " / ".join(
             f"{n}{slot}" if n > 1 else slot for slot, n in league["starters"].items()
@@ -798,6 +906,13 @@ with st.sidebar:
             f"<span class='mono'>{len(allocation.bench)} / {bench_spots} filled</span>",
             unsafe_allow_html=True,
         )
+
+        for other, players in sorted(st.session_state.rosters.items()):
+            names = ", ".join(f"{p['name'].split()[-1]} ({p['position']})" for p in players) or "nobody yet"
+            st.markdown(
+                f"<div class='sec-head'>{other}'s roster</div><span class='rank-num'>{names}</span>",
+                unsafe_allow_html=True,
+            )
 
         st.divider()
         with st.popover("Reset draft", use_container_width=True):
@@ -967,10 +1082,16 @@ if mode == "Draft":
         your_pick = "draft order not published"
     elif next_pick["picks_until_mine"] == 0:
         your_pick = "<b style='color:#00e0a4'>YOU ARE ON THE CLOCK</b>"
+    elif manual_cfg and next_pick.get("on_clock_user_id") in team_names:
+        your_pick = (
+            f"<b style='color:#fbbf24'>{next_pick['on_clock_user_id']} is on the clock</b> · "
+            f"your pick in <b>{next_pick['picks_until_mine']}</b>"
+        )
     else:
         your_pick = f"your pick in <b>{next_pick['picks_until_mine']}</b>"
+    team_txt = f"<b>{active_team}</b> · " if manual_cfg else ""
     status_html = (
-        f"<span class='status-line'>Round <b>{round_num}</b> · Pick <b>{pick_in_round}</b> · "
+        f"<span class='status-line'>{team_txt}Round <b>{round_num}</b> · Pick <b>{pick_in_round}</b> · "
         f"<b>{picks_made}</b> picks made · roster <b>{len(my_roster)}</b>/{total_picks} · {your_pick}</span>"
     )
     if compact:
@@ -1165,7 +1286,7 @@ if mode == "Draft":
             )
             b1, b2, _ = st.columns([1, 1, 0.01] if compact else [1.2, 1.2, 5], vertical_alignment="center")
             b1.button(
-                f"Draft {pick['name'].split()[-1]}",
+                f"Draft {pick['name'].split()[-1]}" + (f" for {active_team}" if manual_cfg else ""),
                 type="primary",
                 on_click=draft_player,
                 args=(pick, True),
@@ -1314,7 +1435,7 @@ if mode == "Draft":
             )
             # First submit button is what Enter triggers: Taken is the 11-of-12 case
             qcol2.form_submit_button("Taken", key="quick_taken", on_click=quick_mark, args=(False,), use_container_width=True)
-            qcol3.form_submit_button("Mine", key="quick_mine", on_click=quick_mark, args=(True,), type="primary", use_container_width=True)
+            qcol3.form_submit_button(mine_label, key="quick_mine", on_click=quick_mark, args=(True,), type="primary", use_container_width=True)
 
         for i, m in enumerate(st.session_state.get("quick_matches") or []):
             mc = st.columns([3, 1, 1])
@@ -1324,7 +1445,7 @@ if mode == "Draft":
                 unsafe_allow_html=True,
             )
             mc[1].button("Taken", key=f"pick_taken_{i}", on_click=lambda m=m: (draft_player(m, False), st.session_state.update(quick_matches=[], quick_msg=f"✓ Marked taken: {m['name']}")), use_container_width=True)
-            mc[2].button("Mine", key=f"pick_mine_{i}", type="primary", on_click=lambda m=m: (draft_player(m, True), st.session_state.update(quick_matches=[], quick_msg=f"✓ Drafted: {m['name']}")), use_container_width=True)
+            mc[2].button(mine_label, key=f"pick_mine_{i}", type="primary", on_click=lambda m=m: (draft_player(m, True), st.session_state.update(quick_matches=[], quick_msg=f"✓ Drafted: {m['name']}")), use_container_width=True)
 
         msg_col, undo_col = st.columns([4, 1])
         if st.session_state.get("quick_msg"):
@@ -1553,7 +1674,7 @@ if mode == "Draft":
         else:
             c[2].markdown(meta_html, unsafe_allow_html=True)
         c[3].button(
-            "Mine",
+            mine_label,
             key=f"mine_{i}_{key}",
             on_click=draft_player,
             args=(p, True),

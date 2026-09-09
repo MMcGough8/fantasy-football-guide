@@ -219,3 +219,5 @@ __marimo__/
 .sleeper_league.json
 .draft_state.json
 .rehearsal_draft.json
+
+.sleeper_league.*.bak

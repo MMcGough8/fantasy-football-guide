@@ -5,7 +5,7 @@ def test_round_trip(tmp_path):
     path = tmp_path / "state.json"
     save_state(path, "draft-1", drafted={"a|X|RB", "b|Y|WR"}, mine=["b|Y|WR"])
     state = load_state(path, "draft-1")
-    assert state == {"drafted": {"a|X|RB", "b|Y|WR"}, "mine": ["b|Y|WR"]}
+    assert state["drafted"] == {"a|X|RB", "b|Y|WR"} and state["mine"] == ["b|Y|WR"]
 
 
 def test_state_for_another_draft_is_ignored(tmp_path):
