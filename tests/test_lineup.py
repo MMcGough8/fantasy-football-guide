@@ -84,3 +84,10 @@ def test_lineup_diff_only_pairs_players_who_could_share_the_slot():
 def test_current_lineup_ignores_extra_starter_ids():
     rows = {"1": _row("1", "RB", 10)}
     assert current_lineup(["1", "0", "0"], ["RB", "BN"], rows) == {"RB": [rows["1"]]}
+
+
+def test_unplayable_starters_lists_current_starters_who_cannot_play():
+    from lineup import unplayable_starters
+
+    cur = {"RB": [_row("1", "RB", 14.0, "Out"), _row("2", "RB", 10.0)], "WR": [_row("3", "WR", 9.0, None, "bye"), None]}
+    assert [(r["player_id"], reason) for r, reason in unplayable_starters(cur)] == [("1", "Out"), ("3", "bye")]

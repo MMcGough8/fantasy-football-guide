@@ -61,6 +61,11 @@ def expected_points(slots):
     return round(sum(r["points"] for rows in slots.values() for r in rows if r and can_play(r)), 1)
 
 
+def unplayable_starters(current):
+    """[(row, reason)] for current starters who cannot score this week, in slot order."""
+    return [(r, sit_reason(r)) for rows in current.values() for r in rows if r and not can_play(r)]
+
+
 def _player_ids(slots):
     return {r["player_id"] for rows in slots.values() for r in rows if r}
 

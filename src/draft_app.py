@@ -29,7 +29,7 @@ from espn_ranks import match_key
 import sleeper_league
 from sleeper_league import SleeperError
 from draft_state import load_state, save_state
-from lineup import COIN_FLIP_POINTS, current_lineup, expected_points, lineup_diff, lineup_points, optimal_lineup
+from lineup import COIN_FLIP_POINTS, current_lineup, expected_points, lineup_diff, lineup_points, optimal_lineup, unplayable_starters
 from roster_slots import IGNORED_SLOTS, starters_from_roster_positions
 from sleeper_league import find_my_roster, lineup_week
 from weekly_board import attach_weekly_ranks, build_weekly_pool, roster_rows
@@ -2046,6 +2046,10 @@ if mode == "Start/Sit":
     if len(my_team.get("starters") or []) != expected_slots:
         st.caption("Sleeper's starter list does not line up with the league's slots; check the current lineup by hand.")
 
+    replaced = {s["out"]["player_id"] for s in swaps if s["out"]}
+    stuck = [(r, why) for r, why in unplayable_starters(current) if r["player_id"] not in replaced]
+    if stuck:
+        st.warning("Starting but cannot play, with nobody on the roster to replace them: " + ", ".join(f"{r['name']} ({why})" for r, why in stuck))
     if swaps:
         st.markdown("<div class='sec-head'>Swaps</div>", unsafe_allow_html=True)
         for swap in swaps:
