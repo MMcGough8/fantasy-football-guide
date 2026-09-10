@@ -107,3 +107,48 @@ def test_fetch_csv_wraps_network_and_http_errors(monkeypatch):
     monkeypatch.setattr(matchups.requests, "get", boom)
     with pytest.raises(MatchupError):
         fetch_schedule("2026")
+
+
+# ---- kickoff locks ----
+from datetime import datetime, timedelta
+
+from matchups import ET, kickoff_time, locked_teams, next_kickoffs
+
+
+def test_kickoff_time_reads_eastern_and_returns_none_when_blank(schedule_rows):
+    ctx = team_context(schedule_rows, 1)
+    ne = kickoff_time(ctx["NE"])
+    assert ne == datetime(2026, 9, 9, 20, 15, tzinfo=ET)
+    assert kickoff_time({**ctx["NE"], "factor": 1.0}) == ne  # a row's matchup dict carries the same fields
+    assert kickoff_time({"gameday": None, "gametime": None}) is None
+    assert kickoff_time({"gameday": "2026-09-13", "gametime": ""}) is None
+    assert kickoff_time(None) is None
+
+
+def test_locked_teams_treats_kickoff_as_locked_and_later_games_as_free(schedule_rows):
+    ctx = team_context(schedule_rows, 1)
+    at_kickoff = datetime(2026, 9, 9, 20, 15, tzinfo=ET)
+    assert locked_teams(ctx, at_kickoff) == frozenset({"NE", "SEA"})
+    assert locked_teams(ctx, at_kickoff - timedelta(minutes=1)) == frozenset()
+    friday = datetime(2026, 9, 11, 12, 0, tzinfo=ET)
+    assert locked_teams(ctx, friday) == frozenset({"NE", "SEA", "SF", "LAR"})
+    assert locked_teams({}, friday) == frozenset()
+
+
+def test_next_kickoffs_dedupes_games_including_neutral_sites_and_sorts(schedule_rows):
+    ctx = team_context(schedule_rows, 1)
+    upcoming = next_kickoffs(ctx, datetime(2026, 9, 9, 21, 0, tzinfo=ET))
+    assert [sorted(teams) for _, teams in upcoming] == [["LAR", "SF"], ["CAR", "CHI"], ["CIN", "TB"]]
+    assert upcoming[0][0] == datetime(2026, 9, 10, 20, 15, tzinfo=ET)
+    assert next_kickoffs(ctx, datetime(2026, 9, 14, 0, 0, tzinfo=ET)) == []
+
+
+def test_fmt_kickoff_and_game_label(schedule_rows):
+    from matchups import fmt_kickoff, game_label
+
+    ctx = team_context(schedule_rows, 1)
+    assert fmt_kickoff(datetime(2026, 9, 10, 20, 35, tzinfo=ET)) == "Thu 8:35 pm ET"
+    assert fmt_kickoff(datetime(2026, 9, 13, 13, 0, tzinfo=ET)) == "Sun 1:00 pm ET"
+    assert game_label(ctx, frozenset({"NE", "SEA"})) == "NE at SEA"
+    assert game_label(ctx, frozenset({"SF", "LAR"})) == "LAR vs SF"  # neutral site
+    assert game_label({}, frozenset({"B", "A"})) == "A vs B"

@@ -4,6 +4,7 @@ Pure functions over weekly rows (see `weekly_board.roster_rows`): each row carri
 `player_id`, `position`, `points` (this week's league-scored projection),
 `injury_status` and `reason` (why he cannot score this week, or None).
 """
+from matchups import fmt_kickoff, kickoff_time
 from recommend import EXCLUDED_STATUSES
 from roster_slots import BENCH_SLOTS, FLEX_ELIGIBILITY, allocate_slots, starters_from_roster_positions
 
@@ -11,6 +12,7 @@ from roster_slots import BENCH_SLOTS, FLEX_ELIGIBILITY, allocate_slots, starters
 SIT_STATUSES = {"Out", "Doubtful"} | set(EXCLUDED_STATUSES)
 # A swap worth less than this is inside projection noise; the page says so.
 COIN_FLIP_POINTS = 1.5
+KICKOFF_SOON_HOURS = 3  # a swap whose deadline is this close is flagged in red
 EMPTY_SLOT = "0"  # Sleeper's placeholder for an unfilled starting slot
 
 
@@ -108,3 +110,65 @@ def lineup_diff(current, optimal, key="points"):
             "coin_flip": 0 < delta < COIN_FLIP_POINTS,
         })
     return swaps
+
+
+def mark_locked(rows, locked):
+    """New rows stamped with `locked`: the player's game has kicked off, so Sleeper
+    will not move him in or out of the lineup this week."""
+    return [{**r, "locked": r.get("team") in locked} for r in rows]
+
+
+def is_locked(row):
+    return bool(row and row.get("locked"))
+
+
+def locked_starters(current):
+    return [r for rows in current.values() for r in rows if is_locked(r)]
+
+
+def reachable_lineup(rows, current, starters, key="points"):
+    """The best lineup the owner can still set.
+
+    Locked starters stay in the slot they occupy (a locked RB in FLEX stays in FLEX;
+    a locked Out starter stays too, there is nothing to do about him), locked bench
+    players never enter, and the slots left open are filled by `optimal_lineup`
+    over the unlocked rows. Same shape as `optimal_lineup`.
+    """
+    frozen = {slot: [r for r in current.get(slot, []) if is_locked(r)] for slot in starters}
+    open_slots = {slot: n - len(frozen[slot]) for slot, n in starters.items() if n > len(frozen[slot])}
+    incumbents = [r for slot_rows in current.values() for r in slot_rows if r and not is_locked(r)]
+    incumbent_ids = {r["player_id"] for r in incumbents}
+    bench = [r for r in rows if not is_locked(r) and r["player_id"] not in incumbent_ids]
+    # incumbents first: the allocator's sort is stable, so a tie never recommends churn
+    best = optimal_lineup(incumbents + bench, open_slots, key=key) if open_slots else {}
+    return {slot: frozen[slot] + best.get(slot, []) for slot in starters}
+
+
+def swap_deadline(swap):
+    """When the swap must be made: the earlier kickoff of the two players involved,
+    since Sleeper freezes both sides once either game starts. None without a schedule."""
+    kickoffs = [kickoff_time(r.get("matchup")) for r in (swap.get("in"), swap.get("out")) if r]
+    known = [k for k in kickoffs if k is not None]
+    return min(known) if known else None
+
+
+def deadline_status(deadline, now):
+    """("past" | "soon" | "later", text) for a swap's deadline; None without a schedule.
+    Hours are rounded down so the warning never overstates the time left."""
+    if deadline is None:
+        return None
+    hours = (deadline - now).total_seconds() / 3600
+    if hours <= 0:
+        return ("past", "kicked off")
+    if hours <= KICKOFF_SOON_HOURS:
+        left = f"{int(hours * 60)} min" if hours < 1 else f"{int(hours)}h"
+        return ("soon", f"kicks off in {left} ({fmt_kickoff(deadline)})")
+    return ("later", f"by {fmt_kickoff(deadline)}")
+
+
+def missed_players(optimal, reachable):
+    """Players the unconstrained optimal wanted that the locks keep out: the ones locked
+    on the bench themselves, and the free ones blocked by a locked starter holding the slot."""
+    reachable_ids = _player_ids(reachable)
+    kept_out = [r for rows in optimal.values() for r in rows if r and r["player_id"] not in reachable_ids]
+    return {"locked": [r for r in kept_out if is_locked(r)], "blocked": [r for r in kept_out if not is_locked(r)]}

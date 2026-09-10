@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from datetime import datetime
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -29,8 +30,14 @@ from espn_ranks import match_key
 import sleeper_league
 from sleeper_league import SleeperError
 from draft_state import load_state, save_state
-from lineup import COIN_FLIP_POINTS, current_lineup, expected_points, lineup_diff, lineup_points, optimal_lineup, unplayable_starters
-from matchups import MatchupError, attach_matchup, fetch_schedule, team_context
+from lineup import (
+    COIN_FLIP_POINTS, current_lineup, deadline_status, expected_points, is_locked, lineup_diff, lineup_points,
+    locked_starters, mark_locked, missed_players, optimal_lineup, reachable_lineup, swap_deadline, unplayable_starters,
+)
+from matchups import (
+    ET, MatchupError, attach_matchup, fetch_schedule, fmt_kickoff, game_label, kickoff_time, locked_teams, next_kickoffs,
+    team_context,
+)
 from dvp import allowed_per_game, blend_seasons, factors, fetch_player_weeks
 from projection_log import LOG_FILE, ActualsError, accuracy_report, fetch_actual_points, is_logged, log_actuals, log_projections, read_records
 from roster_slots import IGNORED_SLOTS, starters_from_roster_positions
@@ -377,6 +384,12 @@ def load_dvp(season, retry_bucket):
     except MatchupError:
         current, note = {}, f"{season} weekly stats not published yet; DvP uses {int(season) - 1}"
     return {"ok": True, "data": blend_seasons(prior, current), "note": note}
+
+
+def week_lines(week):
+    """The week's per-team context from the cached schedule; empty when nflverse is unreachable."""
+    schedule = load_schedule(SEASON, 0)
+    return team_context(schedule["data"], week) if schedule["ok"] else {}
 
 
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Building this week's projections...")
@@ -2046,6 +2059,7 @@ def lineup_row_html(slot, row, key="points"):
         grade = f" · {row['fp_grade']}" if row.get("fp_grade") else ""
         fp = f" <span class='chip'>FP {row['fp_week_pos_rank']}{spread}{grade}</span>"
     reason = f" <span style='color:#fb923c;font-size:0.78rem'>{row['reason']}</span>" if row.get("reason") else ""
+    lock = " <span class='chip' style='color:#94a3b8'>LOCKED</span>" if row.get("locked") else ""
     split = source_txt(row) if sources_disagree(row) else ""
     points_txt = f"{row['points']:.1f}"
     if key != "points" and row.get(key) is not None and abs(row[key] - row["points"]) >= 0.05:
@@ -2053,7 +2067,7 @@ def lineup_row_html(slot, row, key="points"):
     return (
         f"<div style='margin:3px 0'>{badge(slot)} <span style='color:#ffffff;font-weight:600'>{row['name']}</span>"
         f" <span class='rank-num'>{row.get('team') or ''}</span>{opp} <span class='mono'>{points_txt}</span>"
-        f"<span class='rank-num' style='font-size:0.78rem'>{split}</span>{status_badge(row)}{fp}{reason}</div>"
+        f"<span class='rank-num' style='font-size:0.78rem'>{split}</span>{status_badge(row)}{fp}{reason}{lock}</div>"
     )
 
 
@@ -2067,7 +2081,70 @@ def render_lineup(title, slots, key="points"):
     return total
 
 
-def render_swap(swap, key="points"):
+def deadline_html(deadline, now):
+    """When a swap must be made; red with the time left once kickoff is close."""
+    status = deadline_status(deadline, now)
+    if status is None:
+        return ""
+    state, text = status
+    if state == "later":
+        return f" <span class='rank-num'>{text}</span>"
+    return f" <span style='color:#f87171;font-size:0.8rem'>{text}</span>"
+
+
+def render_lock_status(context, current, rows, now):
+    """One line: which of my players' teams have kicked off, and the next kickoff with
+    any of my starters in it. Only my teams are listed, so a Sunday afternoon does not
+    print half the league."""
+    if not context:
+        st.caption("Kickoff times unavailable (nflverse unreachable); lock status is off.")
+        return
+    mine = {r.get("team") for r in rows if r.get("team")}
+    locked_all = locked_teams(context, now)
+    locked = locked_all & mine
+    bits = []
+    if locked:
+        latest = max(kickoff_time(context[t]) for t in locked)
+        bits.append(f"Locked: {', '.join(sorted(locked))} (kicked off {fmt_kickoff(latest)})")
+    elif locked_all:
+        bits.append("None of your players locked yet")
+    upcoming = next_kickoffs(context, now)
+    if upcoming:
+        kickoff, teams = upcoming[0]
+        starting = [r["name"] for slot_rows in current.values() for r in slot_rows if r and r.get("team") in teams]
+        who = f" ({', '.join(starting)} starting)" if starting else ""
+        bits.append(f"{'Next' if locked_all else 'First'} kickoff: {fmt_kickoff(kickoff)}, {game_label(context, teams)}{who}")
+    if bits:
+        st.markdown("<span class='rank-num'>" + " · ".join(bits) + "</span>", unsafe_allow_html=True)
+
+
+def render_missed(optimal, reachable, key):
+    """What the unconstrained optimal wanted that the locks now prevent."""
+    missed = expected_points(optimal, key) - expected_points(reachable, key)
+    if missed <= 0.05:
+        return
+    who = missed_players(optimal, reachable)
+    parts = [f"{r['name']} (locked on the bench)" for r in who["locked"]]
+    parts += [f"{r['name']} (blocked by a locked starter)" for r in who["blocked"]]
+    st.markdown(
+        f"<span class='rank-num'>Missed: {', '.join(parts)}; would have added {missed:.1f}.</span>",
+        unsafe_allow_html=True,
+    )
+
+
+LOCK_WATCH_SECONDS = 60
+
+
+@st.fragment(run_every=LOCK_WATCH_SECONDS)
+def lock_watch(week):
+    """Reruns the page when a kickoff passes, so a page left open locks players on time."""
+    locked = locked_teams(week_lines(week), datetime.now(ET))
+    if locked != st.session_state.get("ss_locked_snapshot"):
+        st.session_state.ss_locked_snapshot = locked
+        st.rerun(scope="app")
+
+
+def render_swap(swap, key="points", now=None):
     player, out = swap["in"], swap["out"]
     if out and swap["out_reason"]:
         out_txt = f" for <b>{out['name']}</b> <span style='color:#f87171'>({swap['out_reason']})</span>"
@@ -2076,10 +2153,11 @@ def render_swap(swap, key="points"):
     else:
         out_txt = " into an empty slot"
     flip = " <span class='chip' style='color:#fbbf24'>COIN FLIP</span>" if swap["coin_flip"] else ""
+    due = deadline_html(swap_deadline(swap), now or datetime.now(ET))
     color = "#00e0a4" if swap["delta"] >= 0 else "#f87171"
     st.markdown(
         f"<div style='margin:4px 0'>{badge(swap['slot'])} Start <b>{player['name']}</b> ({player.get(key, 0):.1f}){out_txt}"
-        f" · <span class='mono' style='color:{color}'>{swap['delta']:+.1f}</span>{status_badge(player)}{flip}</div>",
+        f" · <span class='mono' style='color:{color}'>{swap['delta']:+.1f}</span>{status_badge(player)}{flip}{due}</div>",
         unsafe_allow_html=True,
     )
 
@@ -2148,12 +2226,19 @@ if mode == "Start/Sit":
         st.stop()
     st.session_state.ss_degraded = ss_degraded
     byes = {p["team"]: p["bye"] for p in board if p.get("bye")}
-    rows = roster_rows(my_team.get("players") or [], pool, board_by_id, byes, ss_week)
+    week_context = week_lines(ss_week)
+    now = datetime.now(ET)
+    locked_now = locked_teams(week_context, now)
+    st.session_state.ss_locked_snapshot = locked_now
+    lock_watch(ss_week)
+    # Locks are stamped before the lineups are built so every dict downstream carries the flag
+    rows = mark_locked(roster_rows(my_team.get("players") or [], pool, board_by_id, byes, ss_week), locked_now)
     rows_by_id = {r["player_id"]: r for r in rows}
     ss_key = "adjusted_points" if st.session_state.ss_adjust_pref else "points"
     current = current_lineup(my_team.get("starters") or [], roster_positions, rows_by_id)
     optimal = optimal_lineup(rows, ss_starters, key=ss_key)
-    swaps = lineup_diff(current, optimal, key=ss_key)
+    reachable = reachable_lineup(rows, current, ss_starters, key=ss_key)
+    swaps = lineup_diff(current, reachable, key=ss_key)
     ss_scoring = ctx["league"].get("scoring_settings") or {}
     log_slot = (SEASON, ss_week, ss_league["league_id"])
     if log_slot not in st.session_state.ss_logged:
@@ -2171,27 +2256,37 @@ if mode == "Start/Sit":
     if len(my_team.get("starters") or []) != expected_slots:
         st.caption("Sleeper's starter list does not line up with the league's slots; check the current lineup by hand.")
 
+    render_lock_status(week_context, current, rows, now)
     replaced = {s["out"]["player_id"] for s in swaps if s["out"]}
     stuck = [(r, why) for r, why in unplayable_starters(current) if r["player_id"] not in replaced]
-    if stuck:
-        st.warning("Starting but cannot play, with nobody on the roster to replace them: " + ", ".join(f"{r['name']} ({why})" for r, why in stuck))
+    stuck_open = [(r, why) for r, why in stuck if not is_locked(r)]
+    stuck_locked = [(r, why) for r, why in stuck if is_locked(r)]
+    if stuck_open:
+        st.warning("Starting but cannot play, with nobody on the roster to replace them: " + ", ".join(f"{r['name']} ({why})" for r, why in stuck_open))
+    if stuck_locked:
+        st.caption("Locked and cannot play, nothing to do now: " + ", ".join(f"{r['name']} ({why})" for r, why in stuck_locked))
+    current_starters = [r for slot_rows in current.values() for r in slot_rows if r]
+    all_locked = bool(current_starters) and len(locked_starters(current)) == len(current_starters)
     if swaps:
         st.markdown("<div class='sec-head'>Swaps</div>", unsafe_allow_html=True)
         for swap in swaps:
-            render_swap(swap, ss_key)
-        gain = lineup_points(optimal, ss_key) - expected_points(current, ss_key)
+            render_swap(swap, ss_key, now)
+        gain = expected_points(reachable, ss_key) - expected_points(current, ss_key)
         st.markdown(f"<span class='rank-num'>Total: {gain:+.1f} projected points from the players who can play. Swaps under {COIN_FLIP_POINTS} points are inside projection noise.</span>", unsafe_allow_html=True)
+    elif all_locked:
+        st.info(f"Week {ss_week} is locked; nothing left to change.")
     else:
         st.success("Lineup already optimal for this week.")
+    render_missed(optimal, reachable, ss_key)
 
     left, right = st.columns(2)
     with left:
         render_lineup("Current", current, ss_key)
     with right:
-        render_lineup("Optimal", optimal, ss_key)
+        render_lineup("Optimal" + (" (locks applied)" if any(r.get("locked") for r in rows) else ""), reachable, ss_key)
 
     st.markdown("<div class='sec-head'>Bench</div>", unsafe_allow_html=True)
-    started = {r["player_id"] for slot_rows in optimal.values() for r in slot_rows if r}
+    started = {r["player_id"] for slot_rows in reachable.values() for r in slot_rows if r}
     for row in sorted((r for r in rows if r["player_id"] not in started), key=lambda r: -r.get(ss_key, 0)):
         st.markdown(lineup_row_html(row["position"], row, ss_key), unsafe_allow_html=True)
 
@@ -2202,8 +2297,6 @@ if mode == "Start/Sit":
             st.markdown(f"<div class='mono' style='font-size:0.82rem'>{row['name']}: {by_source}{fp}</div>", unsafe_allow_html=True)
 
     with st.expander("Matchups and accuracy", expanded=False):
-        schedule = load_schedule(SEASON, 0)
-        week_context = team_context(schedule["data"], ss_week) if schedule["ok"] else {}
         with_lines = sorted((c for c in week_context.items() if c[1].get("implied") is not None), key=lambda kv: -kv[1]["implied"])
         if with_lines:
             st.markdown("<div class='sec-head'>Implied team totals</div>", unsafe_allow_html=True)

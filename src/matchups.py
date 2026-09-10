@@ -9,6 +9,8 @@ projection log once enough actuals exist (see `projection_log.accuracy_report`).
 """
 import csv
 import io
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -17,6 +19,7 @@ TIMEOUT_SECONDS = 30
 # nflverse team codes that differ from Sleeper's
 TEAM_CODES = {"LA": "LAR"}
 DEFAULT_IMPLIED = 22.5  # league-average implied team total when no lines are posted
+ET = ZoneInfo("America/New_York")  # nflverse publishes gameday/gametime in US/Eastern
 
 # adjusted = points x clamp(implied_term x dvp_term x site_term, 1 - CAP, 1 + CAP)
 A_IMPLIED = 0.35  # elasticity to the team's implied total vs the league average
@@ -156,3 +159,52 @@ def attach_matchup(pool, context, dvp):
             "adjusted_points": round(row["points"] * factor, 1),
         }
     return adjusted
+
+
+def kickoff_time(ctx):
+    """Kickoff as an aware Eastern datetime, from a team context or a row's `matchup`
+    (both carry `gameday` and `gametime`); None when either is unknown."""
+    if not ctx or not ctx.get("gameday") or not ctx.get("gametime"):
+        return None
+    try:
+        return datetime.strptime(f"{ctx['gameday']} {ctx['gametime']}", "%Y-%m-%d %H:%M").replace(tzinfo=ET)
+    except ValueError:
+        return None
+
+
+def _has_kicked_off(ctx, now):
+    kickoff = kickoff_time(ctx)
+    return kickoff is not None and kickoff <= now
+
+
+def locked_teams(context, now):
+    """Teams whose game has kicked off by `now`; Sleeper locks their players at kickoff."""
+    return frozenset(team for team, ctx in context.items() if _has_kicked_off(ctx, now))
+
+
+def fmt_kickoff(when):
+    """'Thu 8:35 pm ET' (the %-I directive is POSIX-only, which covers macOS and Linux)."""
+    return when.strftime("%a %-I:%M %p ET").replace("AM", "am").replace("PM", "pm")
+
+
+def game_label(context, teams):
+    """'SF at LAR', or 'LAR vs SF' when the game is on a neutral site."""
+    away = [t for t in teams if (context.get(t) or {}).get("site") == "away"]
+    home = [t for t in teams if (context.get(t) or {}).get("site") == "home"]
+    if away and home:
+        return f"{away[0]} at {home[0]}"
+    return " vs ".join(sorted(teams))
+
+
+def next_kickoffs(context, now):
+    """[(kickoff, frozenset(teams))] for the week's games still to start, earliest first.
+
+    Each game appears twice in the context (once per team) and a neutral-site game
+    has no home side, so games are keyed by the pair of teams.
+    """
+    games = {}
+    for team, ctx in context.items():
+        kickoff = kickoff_time(ctx)
+        if kickoff is not None and kickoff > now:
+            games[frozenset({team, ctx.get("opponent")})] = kickoff
+    return sorted(((kickoff, teams) for teams, kickoff in games.items()), key=lambda pair: (pair[0], sorted(pair[1])))
