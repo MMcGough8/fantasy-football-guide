@@ -32,12 +32,10 @@ from sleeper_league import SleeperError
 from draft_state import load_state, save_state
 from lineup import (
     COIN_FLIP_POINTS, current_lineup, deadline_status, expected_points, is_locked, lineup_diff, lineup_points,
-    locked_starters, mark_locked, missed_players, optimal_lineup, reachable_lineup, swap_deadline, unplayable_starters,
+    lock_status, locked_starters, mark_locked, missed_players, optimal_lineup, reachable_lineup, swap_deadline,
+    unplayable_starters,
 )
-from matchups import (
-    ET, MatchupError, fetch_schedule, fmt_kickoff, game_label, kickoff_time, locked_teams, next_kickoffs,
-    team_context,
-)
+from matchups import ET, MatchupError, fetch_schedule, locked_teams, team_context
 from dvp import allowed_per_game, blend_seasons, factors, fetch_player_weeks
 from odds import OddsError, fetch_odds, merge_lines, parse_events
 from projection_log import LOG_FILE, ActualsError, accuracy_report, fetch_actual_points, is_logged, log_actuals, log_projections, read_records
@@ -2165,29 +2163,13 @@ def deadline_html(deadline, now):
 
 
 def render_lock_status(context, current, rows, now):
-    """One line: which of my players' teams have kicked off, and the next kickoff with
-    any of my starters in it. Only my teams are listed, so a Sunday afternoon does not
-    print half the league."""
+    """The lock line (`lineup.lock_status`), or why there is none."""
     if not context:
         st.caption("Kickoff times unavailable (nflverse unreachable); lock status is off.")
         return
-    mine = {r.get("team") for r in rows if r.get("team")}
-    locked_all = locked_teams(context, now)
-    locked = locked_all & mine
-    bits = []
-    if locked:
-        latest = max(kickoff_time(context[t]) for t in locked)
-        bits.append(f"Locked: {', '.join(sorted(locked))} (kicked off {fmt_kickoff(latest)})")
-    elif locked_all:
-        bits.append("None of your players locked yet")
-    upcoming = next_kickoffs(context, now)
-    if upcoming:
-        kickoff, teams = upcoming[0]
-        starting = [r["name"] for slot_rows in current.values() for r in slot_rows if r and r.get("team") in teams]
-        who = f" ({', '.join(starting)} starting)" if starting else ""
-        bits.append(f"{'Next' if locked_all else 'First'} kickoff: {fmt_kickoff(kickoff)}, {game_label(context, teams)}{who}")
-    if bits:
-        st.markdown("<span class='rank-num'>" + " · ".join(bits) + "</span>", unsafe_allow_html=True)
+    text = lock_status(context, rows, current, now)
+    if text:
+        st.markdown(f"<span class='rank-num'>{text}</span>", unsafe_allow_html=True)
 
 
 def render_missed(optimal, reachable, key):

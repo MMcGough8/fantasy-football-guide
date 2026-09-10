@@ -4,7 +4,7 @@ Pure functions over weekly rows (see `weekly_board.roster_rows`): each row carri
 `player_id`, `position`, `points` (this week's league-scored projection),
 `injury_status` and `reason` (why he cannot score this week, or None).
 """
-from matchups import fmt_kickoff, kickoff_time
+from matchups import fmt_kickoff, game_label, kickoff_time, locked_teams, next_kickoffs
 from recommend import EXCLUDED_STATUSES
 from roster_slots import BENCH_SLOTS, FLEX_ELIGIBILITY, allocate_slots, starters_from_roster_positions
 
@@ -172,3 +172,25 @@ def missed_players(optimal, reachable):
     reachable_ids = _player_ids(reachable)
     kept_out = [r for rows in optimal.values() for r in rows if r and r["player_id"] not in reachable_ids]
     return {"locked": [r for r in kept_out if is_locked(r)], "blocked": [r for r in kept_out if not is_locked(r)]}
+
+
+def lock_status(context, rows, current, now):
+    """One line: which of my players' teams have kicked off, and the next kickoff with any
+    of my starters in it. Only my teams are listed, so a Sunday afternoon does not print
+    half the league. None when there is nothing to say (no schedule, or a finished week)."""
+    mine = {r.get("team") for r in rows if r.get("team")}
+    locked_all = locked_teams(context, now)
+    locked = locked_all & mine
+    bits = []
+    if locked:
+        latest = max(kickoff_time(context[t]) for t in locked)
+        bits.append(f"Locked: {', '.join(sorted(locked))} (kicked off {fmt_kickoff(latest)})")
+    elif locked_all:
+        bits.append("None of your players locked yet")
+    upcoming = next_kickoffs(context, now)
+    if upcoming:
+        kickoff, teams = upcoming[0]
+        starting = [r["name"] for slot_rows in current.values() for r in slot_rows if r and r.get("team") in teams]
+        who = f" ({', '.join(starting)} starting)" if starting else ""
+        bits.append(f"{'Next' if locked_all else 'First'} kickoff: {fmt_kickoff(kickoff)}, {game_label(context, teams)}{who}")
+    return " · ".join(bits) if bits else None

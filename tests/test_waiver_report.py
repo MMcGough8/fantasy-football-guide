@@ -61,3 +61,20 @@ def test_format_swap_marks_out_starters_coin_flips_and_empty_slots():
     assert format_swap(for_out, "points", now) == "RB: start Healthy Back (9.0) for Hurt Back (14.0, Out), +9.0"
     flip = {"slot": "WR", "in": _row("1", "WR", 9.0, "A"), "out": _row("2", "WR", 8.5, "B"), "out_reason": None, "delta": 0.5, "coin_flip": True}
     assert format_swap(flip, "points", now) == "WR: start A (9.0) for B (8.5), +0.5 (coin flip)"
+
+
+def test_lineup_only_report_has_the_lock_line_and_swaps_and_nothing_else():
+    swap = {"slot": "WR", "in": _row("1", "WR", 11.6, "Michael Pittman", "IND"), "out": _row("2", "WR", 10.0, "Courtland Sutton", "DEN"),
+            "out_reason": None, "delta": 1.6, "coin_flip": False}
+    text = format_league_report("Deuces", "magoo82", 1, {"type": "FAAB", "budget": 100, "clear_days": 2}, 87, [swap],
+                                {"season": [], "week": [], "depth": []}, [], "points", ["ESPN weekly: down"],
+                                lineup_only=True, lock_line="Locked: NE (kicked off Wed 8:15 pm ET)")
+    lines = text.splitlines()
+    assert lines[0] == "== Deuces (magoo82) · week 1 ==" and lines[1] == "Locked: NE (kicked off Wed 8:15 pm ET)"
+    assert "WR: start Michael Pittman (11.6) for Courtland Sutton (10.0), +1.6" in text
+    assert "Notes: ESPN weekly: down" in text
+    for absent in ("Waivers:", "Add for the season", "Streamers", "Depth upgrades", "Drop candidates"):
+        assert absent not in text
+    quiet = format_league_report("Girls", "amcgough13", 1, {}, None, [], {"season": [], "week": [], "depth": []}, [], "points", [],
+                                 lineup_only=True, lock_line=None)
+    assert quiet.splitlines() == ["== Girls (amcgough13) · week 1 ==", "Lineup: already optimal"]

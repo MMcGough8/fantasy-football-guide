@@ -1,11 +1,12 @@
 """Tuesday waiver report for every Sleeper league of the given users; the cloud
 routine's entry point.
 
-    .venv/bin/python src/waiver_report.py --user magoo82 --user amcgough13 [--week N] [--limit 8]
+    .venv/bin/python src/waiver_report.py --user magoo82 --user amcgough13 [--week N] [--limit 8] [--lineup-only]
 
 Plain text on stdout, one block per league: waiver settings and FAAB, the
 kickoff-aware lineup swaps, adds for the season, streamers for the week, drop
-candidates. A league that fails prints its error and the report goes on. Feeds:
+candidates. `--lineup-only` (the pre-game routine) prints just the lock line and the
+swaps. A league that fails prints its error and the report goes on. Feeds:
 Sleeper (always), FantasyPros (FANTASYPROS_API_KEY), ESPN, nflverse lines and DvP,
 The Odds API (ODDS_API_KEY); a missing feed is noted, never fatal.
 """
@@ -24,7 +25,7 @@ from draft_board import SEASON, build_board
 from dvp import allowed_per_game, blend_seasons, factors, fetch_player_weeks
 from espn_projections import EspnError
 from fantasypros import FantasyProsError
-from lineup import current_lineup, deadline_status, lineup_diff, mark_locked, reachable_lineup, swap_deadline
+from lineup import current_lineup, deadline_status, lineup_diff, lock_status, mark_locked, reachable_lineup, swap_deadline
 from matchups import ET, MatchupError, fetch_schedule, locked_teams, team_context
 from odds import OddsError, fetch_odds, merge_lines, parse_events
 from sleeper_league import SleeperError
@@ -99,10 +100,19 @@ def _section(title, items, empty):
     return [f"{title}:"] + [f"  {item}" for item in items]
 
 
-def format_league_report(name, username, week, settings, faab, swaps, targets, drops, key, notes, now=None):
+def format_league_report(name, username, week, settings, faab, swaps, targets, drops, key, notes, now=None,
+                         lineup_only=False, lock_line=None):
     now = now or datetime.now(ET)
-    lines = [f"== {name} ({username}) · week {week} ==", waiver_line(settings, faab)]
+    lines = [f"== {name} ({username}) · week {week} =="]
+    if lock_line:
+        lines.append(lock_line)
+    if not lineup_only:
+        lines.append(waiver_line(settings, faab))
     lines += _section("Lineup", [format_swap(s, key, now) for s in swaps], "already optimal")
+    if lineup_only:
+        if notes:
+            lines.append("Notes: " + "; ".join(notes))
+        return "\n".join(lines)
     lines += _section("Add for the season", [format_target(e, key) for e in targets["season"]], "nobody on the wire improves this lineup")
     lines += _section(f"Streamers for week {week}", [format_target(e, key) for e in targets["week"]], "none worth a claim")
     lines += _section("Depth upgrades", [format_depth(e) for e in targets.get("depth", [])], "nobody beats your worst bench player over the season")
@@ -197,7 +207,7 @@ class SharedFeeds:
 
 # ---- one league ----
 
-def league_report(username, user_id, league, shared, limit):
+def league_report(username, user_id, league, shared, limit, lineup_only=False):
     cfg = sleeper_league.league_config(league, user_id)
     rosters = sleeper_league.get_rosters(cfg["league_id"])
     mine = sleeper_league.find_my_roster(rosters, user_id)
@@ -211,13 +221,17 @@ def league_report(username, user_id, league, shared, limit):
     rows = mark_locked(roster_rows(mine.get("players") or [], pool, by_id, {}, week), locked)
     current = current_lineup(mine.get("starters") or [], league.get("roster_positions") or [], {r["player_id"]: r for r in rows})
     swaps = lineup_diff(current, reachable_lineup(rows, current, starters, key=KEY), key=KEY)
+    lock_line = lock_status(shared.context, rows, current, now)
+    if lineup_only:
+        return format_league_report(cfg["name"], username, week, {}, None, swaps, {}, [], KEY, shared.notes, now,
+                                    lineup_only=True, lock_line=lock_line)
     my_season = [by_id[r["player_id"]] for r in rows if r["player_id"] in by_id]
     free = mark_locked(free_agents(pool, rosters), locked)
     targets = waiver_targets(free, rows, my_season, by_id, starters, KEY, shared.trending, limit, current=current)
     drops = drop_candidates(rows, my_season, starters, key=KEY, current=current)
     settings = waiver_settings(league)
     return format_league_report(cfg["name"], username, week, settings, faab_left(mine, settings["budget"]),
-                                swaps, targets, drops, KEY, shared.notes, now)
+                                swaps, targets, drops, KEY, shared.notes, now, lock_line=lock_line)
 
 
 def main(argv=None):
@@ -225,6 +239,7 @@ def main(argv=None):
     parser.add_argument("--user", action="append", required=True, help="Sleeper username (repeatable)")
     parser.add_argument("--week", type=int, help="NFL week (default: the current lineup week)")
     parser.add_argument("--limit", type=int, default=8, help="players per list")
+    parser.add_argument("--lineup-only", action="store_true", help="just the lock line and the swaps (the pre-game check)")
     args = parser.parse_args(argv)
     load_dotenv(os.path.join(REPO_ROOT, ".env"))
     week = args.week or sleeper_league.lineup_week(sleeper_league.get_nfl_state())
@@ -240,7 +255,7 @@ def main(argv=None):
             continue
         for league in leagues:
             try:
-                print(league_report(username, user["user_id"], league, shared, args.limit))
+                print(league_report(username, user["user_id"], league, shared, args.limit, args.lineup_only))
             except Exception as e:  # one league must never sink the report
                 print(f"== {league.get('name', '?')} ({username}) ==\nReport failed: {type(e).__name__}: {e}")
                 failures += 1

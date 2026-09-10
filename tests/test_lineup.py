@@ -215,3 +215,23 @@ def test_swap_deadline_is_the_earlier_kickoff_of_the_two_players():
     assert swap_deadline(swap) == datetime(2026, 9, 13, 13, 0, tzinfo=ET)
     assert swap_deadline({"in": dict(_row("1", "RB", 10), matchup=late), "out": None}) == datetime(2026, 9, 13, 16, 25, tzinfo=ET)
     assert swap_deadline({"in": dict(_row("1", "RB", 10), matchup=None), "out": None}) is None
+
+
+def test_lock_status_names_my_locked_teams_and_the_next_kickoff():
+    from lineup import lock_status
+
+    def game(opponent, site, day, time):
+        return {"opponent": opponent, "site": site, "gameday": day, "gametime": time}
+
+    context = {"NE": game("SEA", "away", "2026-09-09", "20:15"), "SEA": game("NE", "home", "2026-09-09", "20:15"),
+               "DEN": game("KC", "away", "2026-09-13", "13:00"), "KC": game("DEN", "home", "2026-09-13", "13:00")}
+    maye, sutton = dict(_row("1", "QB", 20), name="Drake Maye", team="NE"), dict(_row("2", "WR", 10), name="Courtland Sutton", team="DEN")
+    current = {"QB": [maye], "WR": [sutton]}
+    before = datetime(2026, 9, 9, 12, 0, tzinfo=ET)
+    assert lock_status(context, [maye, sutton], current, before) == "First kickoff: Wed 8:15 pm ET, NE at SEA (Drake Maye starting)"
+    after = datetime(2026, 9, 9, 21, 0, tzinfo=ET)
+    assert lock_status(context, [maye, sutton], current, after) == (
+        "Locked: NE (kicked off Wed 8:15 pm ET) · Next kickoff: Sun 1:00 pm ET, DEN at KC (Courtland Sutton starting)")
+    assert lock_status(context, [sutton], {"WR": [sutton]}, after) == (
+        "None of your players locked yet · Next kickoff: Sun 1:00 pm ET, DEN at KC (Courtland Sutton starting)")
+    assert lock_status({}, [maye], current, after) is None
