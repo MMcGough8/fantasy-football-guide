@@ -595,6 +595,7 @@ BOOK_LABELS = {"draftkings": "DraftKings", "fanduel": "FanDuel", "betmgm": "BetM
 BOOK_KEYS = {v: k for k, v in BOOK_LABELS.items()}
 SIDE_LABELS = {"over": "O", "under": "U", "yes": "TD"}
 MAX_BOARD_ROWS = 80
+MODEL_MARKET_GAP = 0.12  # our probability vs the market's, beyond which a leg is flagged to check the news
 COIN_FLIP_CONFIDENCE = 0.55  # below this a swap is a coin flip, to LEAN_CONFIDENCE a lean, above it a call
 LEAN_CONFIDENCE = 0.65
 
@@ -2722,6 +2723,8 @@ def prop_flags(entry):
     ok, reason = is_safe(entry["p"], entry["price"], entry["ev"], entry["market"])
     if reason == "too good: check the line":
         flags.append("CHECK LINE")
+    if entry.get("p_model") is not None and entry.get("p_market") is not None and abs(entry["p_model"] - entry["p_market"]) >= MODEL_MARKET_GAP:
+        flags.append("CHECK NEWS")  # a big model-vs-market gap is usually the market knowing something (a role change, an injury)
     return flags
 
 
