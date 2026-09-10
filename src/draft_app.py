@@ -2832,15 +2832,16 @@ def game_when(entry):
     return f"{entry.get('away') or '?'} at {entry.get('home') or '?'} {when}"
 
 
-def leg_row_html(entry, bankroll):
+def leg_row_html(entry, bankroll, rank=None):
     """Two lines: who, what, where and the headline numbers; then the reason in plain words."""
+    number = f"<span class='rank-num'>{rank}</span> " if rank else ""
     money = stake(entry["p_win"], entry["price"], bankroll)
     stake_txt = f" · stake ${money:.0f}" if money else ""
     model = f" · with our model {ev_html(entry['ev'])}" if entry.get("p_model") is not None else ""
     flags = "".join(f" <span class='chip' style='color:#fbbf24'>{f}</span>" for f in prop_flags(entry))
     where = "" if is_game_leg(entry) else f" <span class='rank-num'>{game_when(entry)}</span>"
     return (
-        f"<div class='leg'><div>{badge(entry['position'])} {leg_title_html(entry)}{where}"
+        f"<div class='leg'><div>{number}{badge(entry['position'])} {leg_title_html(entry)}{where}"
         f" · <b>{book_label(entry['book'])}</b> <span class='mono'>{entry['price']:+d}</span> · chance <span class='mono'>{entry['p_win']:.0%}</span>"
         f" · edge {ev_html(entry['ev_line'])}{flags}</div>"
         f"<div class='leg-meta'>{leg_reason(entry)}{model}{stake_txt}</div></div>"
@@ -2877,7 +2878,7 @@ def render_how_it_works():
 def render_best_single(i, entry, bankroll, prefix="best"):
     with st.container(border=True):
         left, right = st.columns([14, 1.4], vertical_alignment="center")
-        left.markdown(f"<span class='rank-num'>{i + 1}</span> {leg_row_html(entry, bankroll)}", unsafe_allow_html=True)
+        left.markdown(leg_row_html(entry, bankroll, rank=i + 1), unsafe_allow_html=True)
         picked = entry["key"] in st.session_state.pp_slip_pref
         right.button("On slip" if picked else "Add", key=f"pp_{prefix}_{i}", on_click=slip_add, args=(entry["key"],), disabled=picked, use_container_width=True)
 
