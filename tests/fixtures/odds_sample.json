@@ -1,0 +1,54 @@
+[
+  {
+    "id": "e1", "sport_key": "americanfootball_nfl", "commence_time": "2026-09-11T00:35:00Z",
+    "home_team": "Los Angeles Rams", "away_team": "San Francisco 49ers",
+    "bookmakers": [
+      {"key": "draftkings", "title": "DraftKings", "last_update": "2026-09-10T12:00:00Z", "markets": [
+        {"key": "spreads", "last_update": "2026-09-10T12:00:00Z", "outcomes": [
+          {"name": "Los Angeles Rams", "price": -110, "point": -3.5},
+          {"name": "San Francisco 49ers", "price": -110, "point": 3.5}]},
+        {"key": "totals", "last_update": "2026-09-10T12:05:00Z", "outcomes": [
+          {"name": "Over", "price": -110, "point": 48.5},
+          {"name": "Under", "price": -110, "point": 48.5}]}]},
+      {"key": "fanduel", "title": "FanDuel", "last_update": "2026-09-10T11:50:00Z", "markets": [
+        {"key": "spreads", "last_update": "2026-09-10T11:50:00Z", "outcomes": [
+          {"name": "San Francisco 49ers", "price": -108, "point": 3.0},
+          {"name": "Los Angeles Rams", "price": -112, "point": -3.0}]},
+        {"key": "totals", "last_update": "2026-09-10T11:50:00Z", "outcomes": [
+          {"name": "Over", "price": -110, "point": 49.0},
+          {"name": "Under", "price": -110, "point": 49.0}]}]}
+    ]
+  },
+  {
+    "id": "e2", "sport_key": "americanfootball_nfl", "commence_time": "2026-09-13T20:25:00Z",
+    "home_team": "Kansas City Chiefs", "away_team": "Denver Broncos",
+    "bookmakers": [
+      {"key": "draftkings", "title": "DraftKings", "last_update": "2026-09-10T12:00:00Z", "markets": [
+        {"key": "spreads", "last_update": "2026-09-10T12:00:00Z", "outcomes": [
+          {"name": "Kansas City Chiefs", "price": -110, "point": -7.5},
+          {"name": "Denver Broncos", "price": -110, "point": 7.5}]},
+        {"key": "totals", "last_update": "2026-09-10T12:00:00Z", "outcomes": [
+          {"name": "Over", "price": -110, "point": 45.5},
+          {"name": "Under", "price": -110, "point": 45.5}]}]},
+      {"key": "fanduel", "title": "FanDuel", "last_update": "2026-09-10T11:50:00Z", "markets": [
+        {"key": "spreads", "last_update": "2026-09-10T11:50:00Z", "outcomes": [
+          {"name": "Kansas City Chiefs", "price": -110, "point": -7.0},
+          {"name": "Denver Broncos", "price": -110, "point": 7.0}]}]}
+    ]
+  },
+  {
+    "id": "e3", "sport_key": "americanfootball_nfl", "commence_time": "2026-09-13T17:00:00Z",
+    "home_team": "London Monarchs", "away_team": "Chicago Bears",
+    "bookmakers": [
+      {"key": "draftkings", "title": "DraftKings", "last_update": "2026-09-10T12:00:00Z", "markets": [
+        {"key": "spreads", "last_update": "2026-09-10T12:00:00Z", "outcomes": [
+          {"name": "London Monarchs", "price": -110, "point": -1.0},
+          {"name": "Chicago Bears", "price": -110, "point": 1.0}]}]}
+    ]
+  },
+  {
+    "id": "e4", "sport_key": "americanfootball_nfl", "commence_time": "2026-09-13T17:00:00Z",
+    "home_team": "Carolina Panthers", "away_team": "Chicago Bears",
+    "bookmakers": []
+  }
+]

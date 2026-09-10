@@ -39,6 +39,7 @@ from matchups import (
     team_context,
 )
 from dvp import allowed_per_game, blend_seasons, factors, fetch_player_weeks
+from odds import OddsError, fetch_odds, merge_lines, parse_events
 from projection_log import LOG_FILE, ActualsError, accuracy_report, fetch_actual_points, is_logged, log_actuals, log_projections, read_records
 from roster_slots import IGNORED_SLOTS, starters_from_roster_positions
 from sleeper_league import find_my_roster, lineup_week
@@ -229,6 +230,7 @@ def refresh_projections():
     load_weekly_fantasypros.clear()
     load_weekly_espn.clear()
     load_schedule.clear()
+    load_live_odds.clear()
     load_dvp.clear()
     st.session_state.board_degraded = False
 
@@ -386,10 +388,45 @@ def load_dvp(season, retry_bucket):
     return {"ok": True, "data": blend_seasons(prior, current), "note": note}
 
 
-def week_lines(week):
-    """The week's per-team context from the cached schedule; empty when nflverse is unreachable."""
+ODDS_CACHE_SECONDS = 6 * 3600  # 4 fetches a day x 2 credits = ~240 of the free tier's 500 a month
+
+
+@st.cache_data(ttl=ODDS_CACHE_SECONDS, show_spinner="Checking game-day lines...")
+def load_live_odds(retry_bucket):
+    """Game-day lines keyed by (home, away) from The Odds API. Never raises: a refused
+    call (bad key, quota) is cached like a result so it is not retried every rerun.
+    Always called with bucket 0; the projection feeds' retry cadence would burn credits."""
+    key = os.getenv("ODDS_API_KEY", "").strip()
+    if not key:
+        return {"ok": False, "error": "set ODDS_API_KEY for game-day lines"}
+    try:
+        result = fetch_odds(key)
+    except OddsError as e:
+        return {"ok": False, "error": str(e)}
+    parsed = parse_events(result["events"])
+    return {"ok": True, "data": parsed["lines"], "remaining": result["remaining"], "missing": parsed["missing"]}
+
+
+def week_games(week):
+    """(games, note): this week's games from the cached schedule with live lines folded in
+    when The Odds API answered; games is empty and the note is the error when nflverse
+    itself is unreachable."""
     schedule = load_schedule(SEASON, 0)
-    return team_context(schedule["data"], week) if schedule["ok"] else {}
+    if not schedule["ok"]:
+        return [], f"schedule: {schedule['error']}"
+    live = load_live_odds(0)
+    if not live["ok"]:
+        return merge_lines(schedule["data"], {}, week), f"lines: nflverse weekly ({live['error']})"
+    games = merge_lines(schedule["data"], live["data"], week)
+    used = sum(1 for g in games if g["week"] == week and g["line_source"] == "live")
+    credits = f", {live['remaining']} credits left" if live["remaining"] is not None else ""
+    return games, f"lines: live for {used} games (The Odds API{credits})"
+
+
+def week_lines(week):
+    """The week's per-team context, live lines included; empty when nflverse is unreachable."""
+    games, _ = week_games(week)
+    return team_context(games, week)
 
 
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Building this week's projections...")
@@ -416,12 +453,14 @@ def load_weekly_pool(week, scoring_items, use_fantasypros, retry_bucket):
     else:
         problems.append(f"ESPN: {espn['error']}")
     pool = attach_weekly_ranks(build_weekly_pool(week, scoring_settings, extra), fp_ranks)
-    schedule = load_schedule(SEASON, 0)  # its own 6h TTL; a feed outage must not refetch nflverse
-    context = team_context(schedule["data"], week) if schedule["ok"] else {}
-    if not schedule["ok"]:
-        problems.append(f"schedule: {schedule['error']}")
-    elif not any(c.get("implied") is not None for c in context.values()):
-        notes.append(f"no Vegas lines posted for week {week} yet")
+    games, lines_note = week_games(week)  # cached loaders with their own TTLs; a feed outage must not refetch them
+    context = team_context(games, week)
+    if not games:
+        problems.append(lines_note)
+    else:
+        notes.append(lines_note)
+        if not any(c.get("implied") is not None for c in context.values()):
+            notes.append(f"no Vegas lines posted for week {week} yet")
     dvp_result = load_dvp(SEASON, 0)
     if not dvp_result["ok"]:
         problems.append(f"DvP: {dvp_result['error']}")
@@ -433,7 +472,7 @@ def load_weekly_pool(week, scoring_items, use_fantasypros, retry_bucket):
     if fp_ranks:
         note += " · FantasyPros weekly consensus"
     if context:
-        note += " · matchups from nflverse lines"
+        note += " · matchups from Vegas lines"
     if problems or notes:
         note += " (" + "; ".join(problems + notes) + ")"
     return pool, note, bool(problems)
@@ -2038,7 +2077,7 @@ def matchup_chip_html(row):
     if m.get("total") is not None:
         bits.append(f"O/U {m['total']:g}")
     if m.get("implied") is not None:
-        bits.append(f"imp {m['implied']:.1f}")
+        bits.append(f"imp {m['implied']:.1f}" + (" live" if m.get("line_source") == "live" else ""))
     if m.get("dvp_rank"):
         bits.append(f"vs {row['position']} #{m['dvp_rank']}")
     if m.get("roof") in ("dome", "closed"):
@@ -2299,7 +2338,8 @@ if mode == "Start/Sit":
     with st.expander("Matchups and accuracy", expanded=False):
         with_lines = sorted((c for c in week_context.items() if c[1].get("implied") is not None), key=lambda kv: -kv[1]["implied"])
         if with_lines:
-            st.markdown("<div class='sec-head'>Implied team totals</div>", unsafe_allow_html=True)
+            live_count = sum(1 for _, c in with_lines if c.get("line_source") == "live")
+            st.markdown(f"<div class='sec-head'>Implied team totals{f' · {live_count} live' if live_count else ''}</div>", unsafe_allow_html=True)
             st.markdown("<div class='mono' style='font-size:0.82rem'>" + "<br>".join(
                 f"{team:<4} {c['implied']:>5.1f}  {'vs' if c['site'] == 'home' else '@' if c['site'] == 'away' else 'n'} {c['opponent']} · O/U {c['total']:g} · spread {c['spread']:+g}"
                 for team, c in with_lines) + "</div>", unsafe_allow_html=True)

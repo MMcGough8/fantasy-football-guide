@@ -152,3 +152,15 @@ def test_fmt_kickoff_and_game_label(schedule_rows):
     assert game_label(ctx, frozenset({"NE", "SEA"})) == "NE at SEA"
     assert game_label(ctx, frozenset({"SF", "LAR"})) == "LAR vs SF"  # neutral site
     assert game_label({}, frozenset({"B", "A"})) == "A vs B"
+
+
+def test_team_context_carries_the_line_source(schedule_rows):
+    from odds import merge_lines
+
+    plain = team_context(schedule_rows, 1)
+    assert plain["NE"]["line_source"] == "nflverse"
+    merged = merge_lines(schedule_rows, {("SEA", "NE"): {"total": 46.0, "spread_line": 1.5, "updated": "x"}}, 1)
+    live = team_context(merged, 1)
+    assert live["NE"]["line_source"] == "live" and live["SEA"]["line_source"] == "live"
+    assert live["NE"]["implied"] == 22.25 and live["SEA"]["implied"] == 23.75  # 46 total, SEA favoured by 1.5
+    assert live["CAR"]["line_source"] == "nflverse"

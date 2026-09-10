@@ -86,13 +86,17 @@ def _implied(total, spread_line, home):
 
 def team_context(games, week):
     """{team: {opponent, site, implied, opponent_implied, total, spread, roof, gameday,
-    gametime}} for every team playing in `week`. `spread` is the team's own view
-    (negative = favored). Bye teams are absent."""
+    gametime, line_source}} for every team playing in `week`. `spread` is the team's own
+    view (negative = favored); `line_source` is "live" when `odds.merge_lines` replaced
+    the nflverse line. Bye teams are absent."""
     context = {}
     for g in games:
         if g["week"] != week:
             continue
-        common = {"total": g["total"], "roof": g["roof"], "gameday": g["gameday"], "gametime": g["gametime"]}
+        common = {
+            "total": g["total"], "roof": g["roof"], "gameday": g["gameday"], "gametime": g["gametime"],
+            "line_source": g.get("line_source", "nflverse"),
+        }
         home_implied = _implied(g["total"], g["spread_line"], home=True)
         away_implied = _implied(g["total"], g["spread_line"], home=False)
         spread = g["spread_line"]

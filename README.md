@@ -41,6 +41,7 @@ An AI analyst and player-news feature run in both modes.
 ### Start/Sit mode
 - **Current vs optimal lineup** — one row per starting slot (FLEX, SUPER_FLEX and the rest), swaps listed with their projected gain, bench with the reason a player cannot score this week (bye, out, no projection).
 - **Kickoff locks** — players whose game has started are frozen where they are (Sleeper will not move them), swaps show the kickoff they must beat, and the page says what a missed swap would have been worth.
+- **Game-day lines** — with a free The Odds API key, the current week's spreads and totals are refreshed from the sportsbooks a few times a day (median across books), so Sunday-morning moves reach the matchup adjustment; without a key the weekly nflverse lines are used.
 - **Matchup adjustment** — each projection is scaled (capped at 12%) by the team's Vegas implied total, home/away, and the opponent's points allowed to the position, all from nflverse's free schedule and weekly stats; the chip on every row shows the line, the implied total, the DvP rank and the factor, and a sidebar toggle turns it off.
 - **Projection accuracy log** — every week's projections are logged locally; one click records the real scores from Sleeper afterward, and the page reports each feed's error so weights and the matchup coefficients can be tuned from evidence.
 - **Trade Evaluator** — on the roadmap.
