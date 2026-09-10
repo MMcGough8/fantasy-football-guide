@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -35,13 +35,21 @@ from lineup import (
     lock_status, locked_starters, mark_locked, missed_players, optimal_lineup, reachable_lineup, swap_deadline,
     unplayable_starters,
 )
-from matchups import ET, MatchupError, fetch_schedule, locked_teams, team_context
+from matchups import ET, MatchupError, fetch_schedule, fmt_kickoff, locked_teams, team_context
 from calibration import CALIBRATION_FILE, Calibration, calibrate_rows, error_sd, swap_confidence
 from dvp import allowed_per_game, blend_seasons, factors, fetch_player_weeks
-from odds import OddsError, fetch_odds, merge_lines, parse_events
+from odds import (
+    OddsError, PROP_MARKETS, fetch_events, fetch_odds, fetch_props_for_events, merge_lines, parse_events, parse_props,
+    select_week_events,
+)
+from props import (
+    PREFERRED_BOOKS, SAFE, TD_MARKET, american_to_decimal, is_safe, parlay_ev, parlay_probability, price_leg, stake,
+)
+from props_log import LOG_FILE as PROPS_LOG_FILE
+from props_log import bet_summary, calibration_report, grade_bets, log_lines, log_stats, record_bet
 from projection_log import (
     LOG_FILE, ActualsError, accuracy_report, decision_curve, fetch_actual_points, is_logged, log_actuals, log_projections,
-    read_records,
+    raw_stats_by_player, read_records,
 )
 from roster_slots import IGNORED_SLOTS, starters_from_roster_positions
 from sleeper_league import find_my_roster, lineup_week
@@ -463,6 +471,68 @@ def week_lines(week):
     return team_context(games, week)
 
 
+EVENTS_CACHE_SECONDS = 3600
+PROPS_PULL_FILE = os.getenv("PROPS_PULL_FILE") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".props_pull.json")
+PROP_SCORING = (("pass_yd", 0.04), ("pass_td", 4), ("pass_int", -1), ("rush_yd", 0.1), ("rush_td", 6), ("rec", 1), ("rec_yd", 0.1), ("rec_td", 6), ("fum_lost", -2))
+
+
+@st.cache_data(ttl=EVENTS_CACHE_SECONDS, show_spinner=False)
+def load_events(retry_bucket):
+    """The season's listed games from The Odds API (a free call); its headers say how many credits are left."""
+    key = os.getenv("ODDS_API_KEY", "").strip()
+    if not key:
+        return {"ok": False, "error": "set ODDS_API_KEY to fetch props"}
+    try:
+        result = fetch_events(key)
+    except OddsError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "data": result["events"], "remaining": result["remaining"]}
+
+
+def week_prop_events(week):
+    events = load_events(0)
+    if not events["ok"]:
+        return events, []
+    games, _ = week_games(week)
+    return events, select_week_events(events["data"], games, week)
+
+
+def save_props_pull(week, fetched):
+    """The last pull on disk, so a reload or a restart shows it without spending credits."""
+    try:
+        with open(PROPS_PULL_FILE, "w") as f:
+            json.dump({"season": SEASON, "week": week, **fetched}, f)
+    except OSError:
+        pass
+
+
+def load_props_pull(week):
+    """The saved pull for this week, or None."""
+    try:
+        with open(PROPS_PULL_FILE) as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return saved if saved.get("season") == SEASON and saved.get("week") == week else None
+
+
+def fetch_week_props(week, markets):
+    """One props call per game of the week. Never cached: a rerun must not spend credits."""
+    key = os.getenv("ODDS_API_KEY", "").strip()
+    events, picked = week_prop_events(week)
+    if not events["ok"]:
+        return {"legs": [], "note": events["error"], "remaining": None}
+    if not picked:
+        return {"legs": [], "note": f"The Odds API lists no games for week {week}", "remaining": events["remaining"]}
+    result = fetch_props_for_events(key, [e["id"] for e in picked], tuple(markets))
+    legs = [leg for event in result["events"] for leg in parse_props(event)]
+    note = f"{len(result['events'])} of {len(picked)} games, {len(legs)} lines pulled {datetime.now(ET).strftime('%a %-I:%M %p ET')}"
+    if result["error"]:
+        note += f" · stopped: {result['error']}"
+    remaining = result["remaining"] if result["remaining"] is not None else events["remaining"]
+    return {"legs": legs, "note": note, "remaining": remaining}
+
+
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner="Building this week's projections...")
 def load_weekly_pool(week, scoring_items, use_fantasypros, retry_bucket):
     """Returns (pool, note, degraded) for one week, mirroring load_board. Informational
@@ -517,6 +587,14 @@ def player_key(p):
 
 SOURCE_LABELS = {"sleeper": "Sleeper", "fp": "FP", "espn": "ESPN", "blend": "Blend", "adjusted": "Adjusted",
                  "calibrated_points": "Calibrated", "calibrated_adjusted_points": "Calibrated + matchup"}
+MARKET_LABELS = {"player_pass_yds": "Pass yds", "player_pass_tds": "Pass TDs", "player_rush_yds": "Rush yds", "player_receptions": "Receptions",
+                 "player_reception_yds": "Rec yds", "player_anytime_td": "Anytime TD"}
+MARKET_KEYS = {v: k for k, v in MARKET_LABELS.items()}
+BOOK_LABELS = {"draftkings": "DraftKings", "fanduel": "FanDuel", "betmgm": "BetMGM", "betrivers": "BetRivers", "betonlineag": "BetOnline",
+               "bovada": "Bovada", "betus": "BetUS", "lowvig": "LowVig", "mybookieag": "MyBookie"}
+BOOK_KEYS = {v: k for k, v in BOOK_LABELS.items()}
+SIDE_LABELS = {"over": "O", "under": "U", "yes": "TD"}
+MAX_BOARD_ROWS = 80
 COIN_FLIP_CONFIDENCE = 0.55  # below this a swap is a coin flip, to LEAN_CONFIDENCE a lean, above it a call
 LEAN_CONFIDENCE = 0.65
 
@@ -678,6 +756,23 @@ if "ss_logged" not in st.session_state:
     st.session_state.ss_logged = set()
 if "ss_waivers_pref" not in st.session_state:
     st.session_state.ss_waivers_pref = False
+# Props mode: its own keys, never the draft's or Start/Sit's; each guarded on its own so a
+# test or a partial state never leaves a sibling missing
+PP_DEFAULTS = {
+    "pp_week_pref": None, "pp_books_pref": list(PREFERRED_BOOKS), "pp_markets_pref": list(PROP_MARKETS), "pp_bankroll_pref": 0.0,
+    "pp_safe_pref": True, "pp_legs": [], "pp_fetch_note": None, "pp_credits": None, "pp_fetch_requested": False, "pp_logged": set(),
+}
+for _key, _default in PP_DEFAULTS.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _default.copy() if isinstance(_default, (list, set)) else _default
+if st.session_state.pp_fetch_requested:
+    # The only place props are fetched: once, on the button, before any widget renders (credits are finite)
+    st.session_state.pp_fetch_requested = False
+    fetched = fetch_week_props(int(st.session_state.pp_week_pref or 1), st.session_state.pp_markets_pref)
+    st.session_state.pp_legs = fetched["legs"]
+    st.session_state.pp_fetch_note = fetched["note"]
+    st.session_state.pp_credits = fetched["remaining"]
+    save_props_pull(int(st.session_state.pp_week_pref or 1), fetched)
 if "pick_log" not in st.session_state:
     st.session_state.pick_log = []
 if "pos_filter" not in st.session_state:
@@ -980,7 +1075,7 @@ with st.sidebar:
         st.markdown("<div class='sec-head'>Mode</div>", unsafe_allow_html=True)
         mode = st.radio(
             "App mode",
-            options=["Draft", "Start/Sit"],
+            options=["Draft", "Start/Sit", "Props"],
             label_visibility="collapsed",
             key="app_mode",
         )
@@ -1062,6 +1157,37 @@ with st.sidebar:
             on_change=lambda: st.session_state.update(ss_adjust_pref=bool(st.session_state.ss_adjust_widget)),
             help="Scale each projection by the team's Vegas implied total, home/away and the opponent's points allowed (capped at 12%). Off by default: on 2023-25 it did not improve accuracy or decisions; the chips still show the context.",
         )
+        st.divider()
+
+    if mode == "Props":
+        st.markdown("<div class='sec-head'>Props</div>", unsafe_allow_html=True)
+        if st.session_state.pp_week_pref is None:
+            state = load_nfl_state(0)
+            st.session_state.pp_week_pref = lineup_week(state["data"]) if state["ok"] else 1
+        st.number_input("Week", min_value=1, max_value=18, value=int(st.session_state.pp_week_pref), key="pp_week_widget",
+                        on_change=lambda: st.session_state.update(pp_week_pref=int(st.session_state.pp_week_widget)))
+        st.multiselect("Books to shop", options=list(BOOK_LABELS.values()), default=[BOOK_LABELS[b] for b in st.session_state.pp_books_pref],
+                       key="pp_books_widget", on_change=lambda: st.session_state.update(pp_books_pref=[BOOK_KEYS[l] for l in st.session_state.pp_books_widget]))
+        st.multiselect("Markets", options=list(MARKET_LABELS.values()), default=[MARKET_LABELS[m] for m in st.session_state.pp_markets_pref],
+                       key="pp_markets_widget", on_change=lambda: st.session_state.update(pp_markets_pref=[MARKET_KEYS[l] for l in st.session_state.pp_markets_widget]))
+        st.number_input("Bankroll ($, optional)", min_value=0.0, value=float(st.session_state.pp_bankroll_pref), step=50.0, key="pp_bankroll_widget",
+                        on_change=lambda: st.session_state.update(pp_bankroll_pref=float(st.session_state.pp_bankroll_widget)),
+                        help="Only for the suggested stake: a quarter Kelly capped at 5% of this")
+        st.toggle("Safe bets only", value=st.session_state.pp_safe_pref, key="pp_safe_widget",
+                  on_change=lambda: st.session_state.update(pp_safe_pref=bool(st.session_state.pp_safe_widget)),
+                  help=f"At least {SAFE['min_probability']:.0%} to hit, at least {SAFE['min_ev']:.0%} expected value at the offered price, nothing shorter than {SAFE['min_price']}, no anytime-TD legs")
+        if not st.session_state.pp_legs:
+            saved = load_props_pull(int(st.session_state.pp_week_pref))
+            if saved:
+                st.session_state.pp_legs, st.session_state.pp_fetch_note = saved["legs"], saved["note"] + " (saved)"
+                st.session_state.pp_credits = saved.get("remaining")
+        events, picked = week_prop_events(int(st.session_state.pp_week_pref))
+        cost = len(picked) * len(st.session_state.pp_markets_pref)
+        credits = st.session_state.pp_credits if st.session_state.pp_credits is not None else events.get("remaining")
+        st.caption(f"{len(picked)} games x {len(st.session_state.pp_markets_pref)} markets = {cost} credits" + (f" · {credits} left this month" if credits is not None else ""))
+        st.button("Fetch this week's props", on_click=lambda: st.session_state.update(pp_fetch_requested=True), use_container_width=True, disabled=not picked)
+        if not events["ok"]:
+            st.caption(events["error"])
         st.divider()
 
     # ---- Sleeper League ----
@@ -1356,7 +1482,9 @@ with st.sidebar:
                 unsafe_allow_html=True,
             )
 # ==================== HEADER ====================
-if mode != "Draft":
+if mode == "Props":
+    subtitle = f"Props · Week {st.session_state.pp_week_pref} · " + (st.session_state.pp_fetch_note or "fetch this week's props from the sidebar")
+elif mode != "Draft":
     ss_pick = st.session_state.ss_league_options.get(st.session_state.ss_league_pref)
     subtitle = f"Start/Sit · Week {st.session_state.ss_week_pref} · " + (ss_pick["name"] if ss_pick else "pick a league in the sidebar")
 elif league:
@@ -2139,7 +2267,8 @@ def lineup_row_html(slot, row, key="points"):
     split = source_txt(row) if sources_disagree(row) else ""
     points_txt = f"{row['points']:.1f}"
     if key != "points" and row.get(key) is not None and abs(row[key] - row["points"]) >= 0.05:
-        points_txt += f" <span style='color:#00e0a4'>→ {row[key]:.1f}</span>"
+        colour = "#00e0a4" if "adjusted" in key else "#94a3b8"  # green is the matchup view; grey the recalibrated scale
+        points_txt += f" <span style='color:{colour}'>→ {row[key]:.1f}</span>"
     return (
         f"<div style='margin:3px 0'>{badge(slot)} <span style='color:#ffffff;font-weight:600'>{row['name']}</span>"
         f" <span class='rank-num'>{row.get('team') or ''}</span>{opp} <span class='mono'>{points_txt}</span>"
@@ -2538,3 +2667,221 @@ if mode == "Start/Sit":
                 st.success(f"Recorded {written} actuals for week {previous}.")
             except (ActualsError, OSError) as e:
                 st.error(str(e))
+
+
+# ==================== PROPS MODE ====================
+def parse_commence(value):
+    """The Odds API's ISO kickoff (UTC) as an aware datetime, or None."""
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+    except ValueError:
+        return None
+
+
+def projection_index(pool):
+    """{normalised name: [rows]} so a prop's player name finds our projection; a clash resolves by team."""
+    index = {}
+    for row in pool.values():
+        index.setdefault(match_key(row["name"], row["position"]), []).append(row)
+    return index
+
+
+def find_projection(index, leg):
+    rows = index.get(match_key(leg["player"], "QB")) or []
+    if len(rows) > 1:
+        rows = [r for r in rows if r.get("team") in (leg["home"], leg["away"])] or rows
+    return rows[0] if rows else None
+
+
+def price_week_legs(cal, legs, index, books, now):
+    """Every priceable leg on the owner's books: not kicked off, projected, healthy enough to play."""
+    priced = []
+    for leg in legs:
+        kickoff = parse_commence(leg.get("commence"))
+        if kickoff and kickoff <= now:
+            continue
+        projection = find_projection(index, leg)
+        if projection is None or projection.get("injury_status") in ("Out", "Doubtful") or is_unavailable(projection):
+            continue
+        for side in (("yes",) if leg["market"] == TD_MARKET else ("over", "under")):
+            entry = price_leg(cal, leg, side, projection, preferred=tuple(books))
+            if entry is None:
+                continue
+            priced.append({**entry, "player_id": projection["player_id"], "team": projection.get("team"), "game": leg["event_id"],
+                           "home": leg["home"], "away": leg["away"], "commence": leg.get("commence"), "kickoff": kickoff,
+                           "injury_status": projection.get("injury_status"), "key": f"{leg['player']} {MARKET_LABELS[leg['market']]} {SIDE_LABELS[side]}{'' if entry['line'] is None else ' ' + f'{entry['line']:g}'}"})
+    return priced
+
+
+def prop_flags(entry):
+    flags = []
+    if entry.get("injury_status") == "Questionable":
+        flags.append("Q")
+    if entry["edge"] >= 1.5:
+        flags.append(f"+{entry['edge']:g} vs consensus")
+    ok, reason = is_safe(entry["p"], entry["price"], entry["ev"], entry["market"])
+    if reason == "too good: check the line":
+        flags.append("CHECK LINE")
+    return flags
+
+
+def prop_row_html(entry, bankroll):
+    when = fmt_kickoff(entry["kickoff"].astimezone(ET)) if entry.get("kickoff") else ""
+    line = "" if entry["line"] is None else f" {entry['line']:g}"
+    ours = f", ours {entry['p_model']:.0%}" if entry.get("p_model") is not None else ""
+    market = f", market {entry['p_market']:.0%}" if entry.get("p_market") is not None else ""
+    money = stake(entry["p"], entry["price"], bankroll)
+    stake_txt = f" · stake ${money:.0f}" if money else ""
+    flags = "".join(f" <span class='chip' style='color:#fbbf24'>{f}</span>" for f in prop_flags(entry))
+    return (
+        f"<div style='margin:3px 0'>{badge(entry['position'])} <b>{entry['player']}</b> <span class='rank-num'>{entry.get('team') or ''} · {entry['away']} at {entry['home']} {when}</span>"
+        f" · {MARKET_LABELS[entry['market']]} {SIDE_LABELS[entry['side']]}{line} · <b>{BOOK_LABELS.get(entry['book'], entry['book'])}</b> <span class='mono'>{entry['price']:+d}</span>"
+        f" · P <span class='mono'>{entry['p']:.0%}</span><span class='rank-num'>{market}{ours}</span> · fair {entry['fair']:+d}"
+        f" · EV <span class='mono' style='color:{'#00e0a4' if entry['ev'] > 0 else '#f87171'}'>{entry['ev']:+.1%}</span>{stake_txt}{flags}</div>"
+    )
+
+
+def render_props_board(priced, safe_only, bankroll):
+    rows = [e for e in priced if not safe_only or is_safe(e["p"], e["price"], e["ev"], e["market"])[0]]
+    rows.sort(key=lambda e: -e["ev"])
+    st.markdown("<div class='sec-head'>Legs</div>", unsafe_allow_html=True)
+    if not rows:
+        st.info("Nothing clears the safe preset on your books this week." if safe_only else "No priceable legs.")
+    for entry in rows[:MAX_BOARD_ROWS]:
+        st.markdown(prop_row_html(entry, bankroll), unsafe_allow_html=True)
+    if len(rows) > MAX_BOARD_ROWS:
+        st.caption(f"{len(rows) - MAX_BOARD_ROWS} more below the cut.")
+    return rows
+
+
+def render_line_shopping(legs, player):
+    """Every book's line and price for one player, one line per market."""
+    st.markdown(f"<div class='sec-head'>Line shopping · {player}</div>", unsafe_allow_html=True)
+    for leg in (l for l in legs if l["player"] == player):
+        cells = []
+        for book, offers in leg["books"].items():
+            parts = [f"{SIDE_LABELS[s]}{'' if v[0] is None else f' {v[0]:g}'} {v[1]:+d}" for s, v in offers.items()]
+            cells.append(f"<b>{BOOK_LABELS.get(book, book)}</b> {' / '.join(parts)}")
+        st.markdown(f"<div class='mono' style='font-size:0.82rem'>{MARKET_LABELS[leg['market']]}: " + " · ".join(cells) + "</div>", unsafe_allow_html=True)
+
+
+def render_parlay(cal, legs):
+    """Joint odds for the chosen legs; the payout is what the book quotes, typed in."""
+    st.markdown("<div class='sec-head'>Parlay</div>", unsafe_allow_html=True)
+    if len(legs) < 2:
+        st.caption(f"Pick two legs above to price a parlay (V1 stops at {SAFE['max_legs']}).")
+        return None
+    if len(legs) > SAFE["max_legs"]:
+        st.warning(f"At most {SAFE['max_legs']} legs for now.")
+        return None
+    try:
+        joint = parlay_probability(cal, legs)
+    except ValueError as e:
+        st.warning(str(e))
+        return None
+    product = 1.0
+    for leg in legs:
+        product *= american_to_decimal(leg["price"])
+    quoted = st.number_input("Payout the book quotes (decimal)", min_value=1.01, value=round(product, 2), step=0.05, key="pp_quote_widget",
+                             help="Same-game parlays are priced by the book with its own correlation; type what it shows")
+    ev = parlay_ev(joint["correlated"], quoted)
+    same_game = len({leg["game"] for leg in legs}) < len(legs)
+    st.markdown(
+        f"<div class='mono'>Joint {joint['correlated']:.1%} (independent {joint['independent']:.1%}, rho {joint['rho']:+.2f}) · fair {1 / joint['correlated']:.2f}"
+        f" · quoted {quoted:.2f} · EV <span style='color:{'#00e0a4' if ev > 0 else '#f87171'}'>{ev:+.1%}</span></div>", unsafe_allow_html=True)
+    if same_game:
+        st.caption("Same-game legs: the book prices the correlation too, so the quoted payout is the number that matters.")
+    return quoted
+
+
+def render_bet_form(week, legs, quoted, books):
+    with st.form("pp_bet_form"):
+        st.markdown("<div class='sec-head'>Record a bet</div>", unsafe_allow_html=True)
+        book = st.selectbox("Book", options=[BOOK_LABELS[b] for b in books] or ["DraftKings"])
+        stake_amount = st.number_input("Stake ($)", min_value=0.0, value=10.0, step=5.0)
+        price = st.number_input("Price (American)", value=int(legs[0]["price"]) if len(legs) == 1 else 0, step=5)
+        if st.form_submit_button("Record", disabled=not legs):
+            bet = {"season": SEASON, "week": week, "book": BOOK_KEYS.get(book, book), "stake": stake_amount,
+                   "price": price if len(legs) == 1 else None, "quoted_payout": quoted if len(legs) > 1 else None,
+                   "legs": [{"player_id": l["player_id"], "player": l["player"], "market": l["market"], "side": l["side"], "line": l["line"], "price": l["price"], "p": l["p"]} for l in legs]}
+            try:
+                st.success(f"Recorded bet {record_bet(PROPS_LOG_FILE, bet)}.")
+            except OSError as e:
+                st.error(f"Couldn't write the props log: {e}")
+
+
+def render_bet_log(week):
+    records = read_records(PROPS_LOG_FILE)
+    summary = bet_summary(records)
+    st.markdown("<div class='sec-head'>Bet log</div>", unsafe_allow_html=True)
+    roi = f" · ROI {summary['roi']:+.1%}" if summary["roi"] is not None else ""
+    st.markdown(f"<span class='rank-num'>{summary['bets']} bets · {summary['graded']} graded · staked ${summary['staked']:.0f} · profit ${summary['profit']:+.0f}{roi}</span>", unsafe_allow_html=True)
+    outcomes = {r["bet_id"]: r for r in records if r.get("kind") == "outcome"}
+    for bet in [r for r in records if r.get("kind") == "bet"][-15:]:
+        legs = "; ".join(f"{l['player']} {MARKET_LABELS.get(l['market'], l['market'])} {SIDE_LABELS.get(l['side'], l['side'])}{'' if l.get('line') is None else f' {l['line']:g}'} {l['price']:+d}" for l in bet["legs"])
+        result = outcomes.get(bet["id"])
+        outcome = f" → <b>{result['result']}</b> ${result['profit']:+.0f}" if result else " · open"
+        st.markdown(f"<div class='mono' style='font-size:0.82rem'>wk {bet.get('week')} {BOOK_LABELS.get(bet.get('book'), bet.get('book'))} ${bet.get('stake', 0):.0f}: {legs}{outcome}</div>", unsafe_allow_html=True)
+    nfl_now = load_nfl_state(0)
+    live_week = lineup_week(nfl_now["data"]) if nfl_now["ok"] else 1
+    previous = week - 1
+    if st.button(f"Grade week {previous} bets", disabled=previous < 1 or previous >= live_week, help="Fetch that week's stats from Sleeper, store them, and settle every open bet"):
+        try:
+            log_stats(PROPS_LOG_FILE, SEASON, previous, raw_stats_by_player(SEASON, previous))
+            st.success(f"Graded {grade_bets(PROPS_LOG_FILE)} bets.")
+        except (ActualsError, OSError) as e:
+            st.error(str(e))
+    return records
+
+
+def render_props_calibration(records):
+    report = calibration_report(records)
+    if not report["graded"]:
+        st.caption("No graded lines yet. Grade a finished week to see how honest the probabilities were.")
+        return
+    st.markdown(f"<span class='rank-num'>{report['graded']} graded lines · log-loss-preferred market weight {report['weight']}</span>", unsafe_allow_html=True)
+    lines = [f"P {b['p'][0]:.0%}-{b['p'][1]:.0%}: n {b['n']:>4} · predicted {b['predicted']:.0%} · hit {b['observed']:.0%}" for b in report["buckets"] if b["n"]]
+    lines += [f"{MARKET_LABELS.get(m, m)}: n {v['n']} · predicted {v['predicted']:.0%} · hit {v['observed']:.0%}" for m, v in report["by_market"].items()]
+    st.markdown("<div class='mono' style='font-size:0.82rem'>" + "<br>".join(lines) + "</div>", unsafe_allow_html=True)
+
+
+def render_props_mode():
+    st.markdown("<div class='sec-head'>Props</div>", unsafe_allow_html=True)
+    week = int(st.session_state.pp_week_pref or 1)
+    legs = st.session_state.pp_legs
+    books = st.session_state.pp_books_pref
+    priced, rows = [], []
+    if not legs:
+        st.info("Fetch this week's props from the sidebar. Every pull costs credits, so it only happens on the button.")
+    else:
+        try:
+            pool, pool_note, _ = load_weekly_pool(week, PROP_SCORING, bool(os.getenv("FANTASYPROS_API_KEY", "").strip()), 0)
+        except Exception as e:
+            st.error(f"Couldn't build week {week} projections: {e}")
+            st.stop()
+        cal = load_calibration(calibration_signature())
+        priced = price_week_legs(cal, legs, projection_index(pool), books, datetime.now(timezone.utc))
+        pull_id = st.session_state.pp_fetch_note
+        if pull_id and (SEASON, week, pull_id) not in st.session_state.pp_logged:
+            try:
+                log_lines(PROPS_LOG_FILE, SEASON, week, priced, pulled_at=pull_id)
+            except OSError as e:
+                st.caption(f"Props log not written: {e}")
+            st.session_state.pp_logged.add((SEASON, week, pull_id))
+        st.markdown(f"<span class='rank-num'>{st.session_state.pp_fetch_note} · {len(priced)} priceable legs on {', '.join(BOOK_LABELS.get(b, b) for b in books)} · {pool_note}</span>", unsafe_allow_html=True)
+        rows = render_props_board(priced, st.session_state.pp_safe_pref, st.session_state.pp_bankroll_pref)
+        by_key = {e["key"]: e for e in priced}
+        chosen = st.multiselect("Parlay legs", options=[e["key"] for e in rows], max_selections=SAFE["max_legs"], key="pp_parlay_widget")
+        quoted = render_parlay(cal, [by_key[k] for k in chosen])
+        players = sorted({e["player"] for e in rows})
+        if players:
+            player = st.selectbox("Line shopping for", options=players, key="pp_player_widget")
+            render_line_shopping(legs, player)
+        render_bet_form(week, [by_key[k] for k in chosen], quoted, books)
+    records = render_bet_log(week)
+    with st.expander("Calibration", expanded=False):
+        render_props_calibration(records)
+
+
+if mode == "Props":
+    render_props_mode()
