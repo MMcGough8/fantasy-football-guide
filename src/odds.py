@@ -9,6 +9,7 @@ totals, which `merge_lines` folds into the nflverse games list before
 retries it on the projection feeds' cadence.
 """
 import statistics
+import time
 
 import requests
 
@@ -129,3 +130,82 @@ def merge_lines(games, lines, week):
             "line_source": "live",
         })
     return merged
+
+
+# ---- player props (per event; each call costs markets x regions credits) ----
+EVENTS_URL = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events"
+EVENT_ODDS_URL = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/events/{event_id}/odds"
+PROP_MARKETS = ("player_pass_yds", "player_pass_tds", "player_rush_yds", "player_receptions", "player_reception_yds", "player_anytime_td")
+PROP_PAUSE_SECONDS = 0.5
+
+
+def fetch_events(api_key):
+    """This season's listed games (a free call): {"events", "remaining", "used"}."""
+    try:
+        resp = requests.get(EVENTS_URL, params={"apiKey": api_key}, timeout=TIMEOUT_SECONDS)
+    except requests.RequestException as e:
+        raise OddsError(f"Couldn't reach The Odds API ({type(e).__name__})") from e
+    if resp.status_code >= 400:
+        raise OddsError(_refusal(resp))
+    try:
+        events = resp.json()
+    except ValueError as e:
+        raise OddsError("The Odds API returned an unexpected response") from e
+    return {"events": events, "remaining": _header_int(resp, "x-requests-remaining"), "used": _header_int(resp, "x-requests-used")}
+
+
+def select_week_events(events, games, week):
+    """The listed events that are this week's games, capped at the week's game count."""
+    pairs = {(g["home"], g["away"]) for g in games if g["week"] == week}
+    picked = [e for e in events if (TEAM_NAMES.get(e.get("home_team")), TEAM_NAMES.get(e.get("away_team"))) in pairs]
+    return picked[:len(pairs)]
+
+
+def fetch_event_props(api_key, event_id, markets=PROP_MARKETS):
+    """One game's player props from every US book: {"event", "remaining", "used", "cost"}."""
+    params = {"apiKey": api_key, "regions": REGIONS, "markets": ",".join(markets), "oddsFormat": "american"}
+    try:
+        resp = requests.get(EVENT_ODDS_URL.format(event_id=event_id), params=params, timeout=TIMEOUT_SECONDS)
+    except requests.RequestException as e:
+        raise OddsError(f"Couldn't reach The Odds API ({type(e).__name__})") from e
+    if resp.status_code >= 400:
+        raise OddsError(_refusal(resp))
+    try:
+        event = resp.json()
+    except ValueError as e:
+        raise OddsError("The Odds API returned an unexpected response") from e
+    return {"event": event, "remaining": _header_int(resp, "x-requests-remaining"), "used": _header_int(resp, "x-requests-used"),
+            "cost": _header_int(resp, "x-requests-last")}
+
+
+def fetch_props_for_events(api_key, event_ids, markets=PROP_MARKETS, pause=PROP_PAUSE_SECONDS):
+    """Props for several games in turn. Stops at the first refusal (a quota or key problem
+    would only repeat) and returns what it got, with the error and the credits left."""
+    events, remaining = [], None
+    for i, event_id in enumerate(event_ids):
+        if i and pause:
+            time.sleep(pause)
+        try:
+            result = fetch_event_props(api_key, event_id, markets)
+        except OddsError as e:
+            return {"events": events, "error": str(e), "remaining": remaining}
+        events.append(result["event"])
+        remaining = result["remaining"]
+    return {"events": events, "error": None, "remaining": remaining}
+
+
+def parse_props(event):
+    """[leg] for one event: {event_id, home, away, commence, player, market, books: {book: {side: (line, price)}}}."""
+    legs = {}
+    for book in event.get("bookmakers") or []:
+        for market in book.get("markets") or []:
+            for outcome in market.get("outcomes") or []:
+                player, side = outcome.get("description"), (outcome.get("name") or "").lower()
+                if not player or side not in ("over", "under", "yes", "no"):
+                    continue
+                leg = legs.setdefault((player, market["key"]), {
+                    "event_id": event.get("id"), "home": TEAM_NAMES.get(event.get("home_team")), "away": TEAM_NAMES.get(event.get("away_team")),
+                    "commence": event.get("commence_time"), "player": player, "market": market["key"], "books": {},
+                })
+                leg["books"].setdefault(book["key"], {})[side] = (outcome.get("point"), outcome.get("price"))
+    return list(legs.values())

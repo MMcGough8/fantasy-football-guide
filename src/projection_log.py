@@ -9,6 +9,7 @@ coefficients can be tuned from evidence.
 """
 import datetime
 import json
+from collections import defaultdict
 import os
 
 import requests
@@ -130,7 +131,21 @@ def fetch_actual_points(season, week, scoring_settings):
     Players Sleeper lists with no game played are left out: an injury is not a
     projection miss. A week with no stats at all is an error, never a week of zeros.
     """
-    actual, rows_seen = {}, 0
+    actual = {}
+    for position, rec in fetch_week_stats(season, week):
+        stats = rec.get("stats") or {}
+        if not stats.get("gp"):
+            continue
+        points = score_stats(stats, scoring_settings, position, estimate_bonuses=False)
+        if points is not None:
+            actual[str(rec.get("player_id"))] = round(points, 1)
+    return actual
+
+
+def fetch_week_stats(season, week):
+    """[(position, Sleeper stats record)] for the week, every position; raises when the week
+    has no stats at all (a week that has not been played is an error, never a week of zeros)."""
+    rows_seen, out = 0, []
     for position in POSITIONS:
         try:
             resp = requests.get(
@@ -145,16 +160,15 @@ def fetch_actual_points(season, week, scoring_settings):
         except ValueError as e:
             raise ActualsError(f"Sleeper returned an unexpected stats response ({e})") from e
         rows_seen += len(rows)
-        for rec in rows:
-            stats = rec.get("stats") or {}
-            if not stats.get("gp"):
-                continue
-            points = score_stats(stats, scoring_settings, position, estimate_bonuses=False)
-            if points is not None:
-                actual[str(rec.get("player_id"))] = round(points, 1)
+        out.extend((position, rec) for rec in rows)
     if rows_seen == 0:
         raise ActualsError(f"Sleeper has no stats for week {week} yet")
-    return actual
+    return out
+
+
+def raw_stats_by_player(season, week):
+    """{player_id: stats} for every player Sleeper lists that week (the props log grades from this)."""
+    return {str(rec.get("player_id")): (rec.get("stats") or {}) for _, rec in fetch_week_stats(season, week)}
 
 
 def _slot_key(record):
@@ -212,6 +226,31 @@ def _feed_weights(pairs):
     errors = _errors(common)
     inverse = {s: 1 / max(sum(abs(x) for x in errors[s]) / len(errors[s]), MAE_FLOOR) for s in FEEDS}
     return {s: round(w / sum(inverse.values()), 3) for s, w in inverse.items()}
+
+
+GAP_BUCKETS = [[1, 2], [2, 3], [3, 5], [5, 8], [8, 99]]
+NEIGHBOURS = 25
+
+
+def decision_curve(records, min_points=5.0):
+    """Share of same-week, same-position pairs where the higher blend scored more, by gap.
+    Same shape as the calibration file's curve, so the two can sit side by side."""
+    by = defaultdict(list)
+    for projection, actual in pair_records(records):
+        if (projection.get("blend") or 0) >= min_points:
+            by[(projection.get("season"), projection.get("week"), projection.get("position"))].append((projection["blend"], actual))
+    tally = {tuple(b): [0, 0] for b in GAP_BUCKETS}
+    for pairs in by.values():
+        srt = sorted(pairs, key=lambda pa: -pa[0])
+        for i in range(len(srt)):
+            for j in range(i + 1, min(i + NEIGHBOURS, len(srt))):
+                gap = srt[i][0] - srt[j][0]
+                for b in tally:
+                    if b[0] <= gap < b[1]:
+                        tally[b][0] += 1
+                        tally[b][1] += srt[i][1] > srt[j][1]
+                        break
+    return [{"gap": list(b), "observed": round(w / n, 4) if n else None, "n": n} for b, (n, w) in tally.items()]
 
 
 def accuracy_report(records, min_points=5.0):

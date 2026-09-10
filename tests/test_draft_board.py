@@ -227,3 +227,17 @@ def test_fetch_position_can_ask_for_one_week(monkeypatch):
     assert seen[0].endswith("/projections/nfl/2026/3")
     barkley = next(p for p in rows if p["name"] == "Saquon Barkley")
     assert barkley["opponent"] == "GB" and barkley["points"] == 19.2
+
+
+def test_fetch_position_keeps_the_blended_stat_line_for_props(monkeypatch, projections, league):
+    from draft_board import PROP_STATS
+
+    monkeypatch.setattr(draft_board.requests, "get", _fake_projections(projections))
+    key = match_key("Jahmyr Gibbs", "RB")
+    base = {k: v for k, v in projections["RB"][0]["stats"].items() if k != "gp" and not k.startswith("adp")}
+    blended = fetch_position("RB", "pts_ppr", scoring_settings=league["scoring_settings"],
+                             extra_sources={"fp": {key: {**base, "rush_yd": 100}}, "espn": {key: {**base, "rush_yd": 99999}}})
+    gibbs = next(p for p in blended if p["name"] == "Jahmyr Gibbs")
+    assert set(gibbs["stats"]) == set(PROP_STATS)
+    assert gibbs["stats"]["rush_yd"] == pytest.approx(base["rush_yd"])  # the median of three lines is Sleeper's own
+    assert gibbs["stats"]["rec"] == pytest.approx(base["rec"]) and gibbs["stats"]["pass_yd"] == 0

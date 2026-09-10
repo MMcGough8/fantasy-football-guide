@@ -10,6 +10,8 @@ _bye_cache = None
 
 SEASON = "2026"
 POSITIONS = ["QB", "RB", "WR", "TE", "K", "DEF"]
+# the blended per-stat line kept on every row (the prop markets and the per-stat backtest read it)
+PROP_STATS = ("pass_yd", "pass_td", "pass_int", "rush_att", "rush_yd", "rush_td", "rec", "rec_yd", "rec_td")
 MIN_POINTS = 1.0  # drop inactive/depth players with negligible projections
 # How deep each position gets drafted in a 12-team, 14-round league; tiers are
 # clustered inside this pool and everyone past it shares one trailing tier.
@@ -130,34 +132,39 @@ def fetch_position(position, scoring="pts_ppr", scoring_settings=None, extra_sou
         points = _points(stats, scoring, scoring_settings, position)
         if points is None or points < MIN_POINTS:
             continue
-        points_by_source = {s: round(points_by_source[s], 1) for s in lines}
-
-        players.append(
-            {
-                "name": name,
-                "position": position,
-                "player_id": rec.get("player_id"),
-                "team": info.get("team") or "FA",
-                "points": round(points, 1),
-                "points_by_source": points_by_source,
-                "sleeper_updated_at": rec.get("updated_at"),
-                "opponent": rec.get("opponent"),
-                "injury_status": info.get("injury_status"),
-                "injury_body_part": info.get("injury_body_part"),
-                "injury_notes": info.get("injury_notes"),
-                "news_updated": info.get("news_updated"),
-                "sources": len(lines),
-                "adp": _adp_or_none(sleeper_stats.get(adp_key)),
-                "years_exp": info.get("years_exp"),
-                "touches": (stats.get("rush_att") or 0) + (stats.get("rec") or 0),
-                "tds": (stats.get("rush_td") or 0) + (stats.get("rec_td") or 0),
-                "big_plays": stats.get("rec_40p") or 0,
-                "receptions": stats.get("rec") or 0,
-            }
-        )
+        by_source = {s: round(points_by_source[s], 1) for s in lines}
+        players.append(_player_row(rec, name, position, stats, points, by_source, sleeper_stats.get(adp_key)))
 
     players.sort(key=lambda p: p["points"], reverse=True)
     return players
+
+
+def _player_row(rec, name, position, stats, points, points_by_source, adp_value):
+    """One board row: identity, the blended score, per-feed scores, Sleeper's injury and news
+    fields, and the blended stat line the prop markets read."""
+    info = rec.get("player") or {}
+    return {
+        "name": name,
+        "position": position,
+        "player_id": rec.get("player_id"),
+        "team": info.get("team") or "FA",
+        "points": round(points, 1),
+        "points_by_source": points_by_source,
+        "sleeper_updated_at": rec.get("updated_at"),
+        "opponent": rec.get("opponent"),
+        "injury_status": info.get("injury_status"),
+        "injury_body_part": info.get("injury_body_part"),
+        "injury_notes": info.get("injury_notes"),
+        "news_updated": info.get("news_updated"),
+        "sources": len(points_by_source),
+        "adp": _adp_or_none(adp_value),
+        "years_exp": info.get("years_exp"),
+        "touches": (stats.get("rush_att") or 0) + (stats.get("rec") or 0),
+        "tds": (stats.get("rush_td") or 0) + (stats.get("rec_td") or 0),
+        "big_plays": stats.get("rec_40p") or 0,
+        "receptions": stats.get("rec") or 0,
+        "stats": {k: stats.get(k) or 0 for k in PROP_STATS},
+    }
 
 
 def add_value_over_replacement(players, position, replacement_rank):

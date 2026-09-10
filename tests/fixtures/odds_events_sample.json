@@ -1,0 +1,26 @@
+[
+ {
+  "id": "evt1",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "Indianapolis Colts",
+  "away_team": "Atlanta Falcons"
+ },
+ {
+  "id": "evt2",
+  "commence_time": "2026-09-14T00:20:00Z",
+  "home_team": "Kansas City Chiefs",
+  "away_team": "Denver Broncos"
+ },
+ {
+  "id": "evt9",
+  "commence_time": "2026-09-21T17:00:00Z",
+  "home_team": "Kansas City Chiefs",
+  "away_team": "Seattle Seahawks"
+ },
+ {
+  "id": "evtx",
+  "commence_time": "2026-09-13T17:00:00Z",
+  "home_team": "London Monarchs",
+  "away_team": "Chicago Bears"
+ }
+]

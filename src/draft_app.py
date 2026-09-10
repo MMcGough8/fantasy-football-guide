@@ -36,9 +36,13 @@ from lineup import (
     unplayable_starters,
 )
 from matchups import ET, MatchupError, fetch_schedule, locked_teams, team_context
+from calibration import CALIBRATION_FILE, Calibration, calibrate_rows, error_sd, swap_confidence
 from dvp import allowed_per_game, blend_seasons, factors, fetch_player_weeks
 from odds import OddsError, fetch_odds, merge_lines, parse_events
-from projection_log import LOG_FILE, ActualsError, accuracy_report, fetch_actual_points, is_logged, log_actuals, log_projections, read_records
+from projection_log import (
+    LOG_FILE, ActualsError, accuracy_report, decision_curve, fetch_actual_points, is_logged, log_actuals, log_projections,
+    read_records,
+)
 from roster_slots import IGNORED_SLOTS, starters_from_roster_positions
 from sleeper_league import find_my_roster, lineup_week
 from waivers import drop_candidates, faab_left, free_agents, parse_trending, waiver_settings, waiver_targets
@@ -511,7 +515,10 @@ def player_key(p):
     return f"{p['name']}|{p['team']}|{p['position']}"
 
 
-SOURCE_LABELS = {"sleeper": "Sleeper", "fp": "FP", "espn": "ESPN", "blend": "Blend", "adjusted": "Adjusted"}
+SOURCE_LABELS = {"sleeper": "Sleeper", "fp": "FP", "espn": "ESPN", "blend": "Blend", "adjusted": "Adjusted",
+                 "calibrated_points": "Calibrated", "calibrated_adjusted_points": "Calibrated + matchup"}
+COIN_FLIP_CONFIDENCE = 0.55  # below this a swap is a coin flip, to LEAN_CONFIDENCE a lean, above it a call
+LEAN_CONFIDENCE = 0.65
 
 
 def fills_need_ui(p):
@@ -666,7 +673,7 @@ if "ss_username" not in st.session_state:
     st.session_state.ss_user_id = None
     st.session_state.ss_week_pref = None
 if "ss_adjust_pref" not in st.session_state:
-    st.session_state.ss_adjust_pref = True
+    st.session_state.ss_adjust_pref = False  # the 2023-25 backtest found no out-of-sample gain; opt in
 if "ss_logged" not in st.session_state:
     st.session_state.ss_logged = set()
 if "ss_waivers_pref" not in st.session_state:
@@ -1049,11 +1056,11 @@ with st.sidebar:
         if st.session_state.get("ss_state_failed") and st.session_state.ss_week_pref is not None:
             st.caption("Week defaulted while Sleeper was unreachable; check it.")
         st.toggle(
-            "Adjust for matchups",
+            "Adjust for matchups (experimental)",
             value=st.session_state.ss_adjust_pref,
             key="ss_adjust_widget",
             on_change=lambda: st.session_state.update(ss_adjust_pref=bool(st.session_state.ss_adjust_widget)),
-            help="Scale each projection by the team's Vegas implied total, home/away and the opponent's points allowed to the position (capped at 12%)",
+            help="Scale each projection by the team's Vegas implied total, home/away and the opponent's points allowed (capped at 12%). Off by default: on 2023-25 it did not improve accuracy or decisions; the chips still show the context.",
         )
         st.divider()
 
@@ -2126,8 +2133,7 @@ def lineup_row_html(slot, row, key="points"):
     fp = ""
     if row.get("fp_week_pos_rank"):
         spread = f" ±{row['fp_week_rank_std']:.0f}" if row.get("fp_week_rank_std") else ""
-        grade = f" · {row['fp_grade']}" if row.get("fp_grade") else ""
-        fp = f" <span class='chip'>FP {row['fp_week_pos_rank']}{spread}{grade}</span>"
+        fp = f" <span class='chip'>FP {row['fp_week_pos_rank']}{spread}</span>"  # the grade carries no signal; it lives in the expander
     reason = f" <span style='color:#fb923c;font-size:0.78rem'>{row['reason']}</span>" if row.get("reason") else ""
     lock = " <span class='chip' style='color:#94a3b8'>LOCKED</span>" if row.get("locked") else ""
     split = source_txt(row) if sources_disagree(row) else ""
@@ -2186,9 +2192,12 @@ def render_missed(optimal, reachable, key):
     )
 
 
-def waiver_row_html(entry, key):
+def waiver_row_html(entry, key, cal=None):
     row = entry["row"]
     gains = f"<span class='mono' style='color:#00e0a4'>{entry['week_gain']:+.1f} this week</span>"
+    if cal and entry["week_gain"] > 0:
+        sd = error_sd(cal, row["position"], row.get(key, 0))
+        gains += confidence_html(swap_confidence(entry["week_gain"], sd, sd))
     if entry["season_gain"] > 0:
         gains += f" · <span class='mono'>{entry['season_gain']:+.0f} season</span>"
     adds = f" <span class='chip'>{entry['adds']:,} adds/24h</span>" if entry["adds"] else ""
@@ -2220,13 +2229,13 @@ def depth_row_html(entry, key):
     )
 
 
-def render_waiver_lists(targets, drops, week, key):
+def render_waiver_lists(targets, drops, week, key, cal=None):
     for title, entries in (("Add for the season", targets["season"]), (f"Streamers for week {week}", targets["week"])):
         st.markdown(f"<div class='sec-head'>{title}</div>", unsafe_allow_html=True)
         if not entries:
             st.caption("Nobody on the wire improves this lineup.")
         for entry in entries:
-            st.markdown(waiver_row_html(entry, key), unsafe_allow_html=True)
+            st.markdown(waiver_row_html(entry, key, cal), unsafe_allow_html=True)
     st.markdown("<div class='sec-head'>Depth upgrades</div>", unsafe_allow_html=True)
     if not targets["depth"]:
         st.caption("Nobody on the wire is worth more over the season than your least valuable bench player.")
@@ -2240,7 +2249,7 @@ def render_waiver_lists(targets, drops, week, key):
         st.markdown(f"<div style='margin:3px 0'>{badge(row['position'])} {row['name']} <span class='rank-num'>{row.get('team') or ''} · {season_label(drop)}</span>{status_badge(row)}</div>", unsafe_allow_html=True)
 
 
-def render_waivers(league, rosters, my_team, rows, current, locked, pool, starters, key, week):
+def render_waivers(league, rosters, my_team, rows, current, locked, pool, starters, key, week, cal):
     """Free agents who improve this week's or the season lineup, and my expendable players."""
     settings = waiver_settings(league)
     line = f"Waivers: {settings['type']}"
@@ -2266,11 +2275,11 @@ def render_waivers(league, rosters, my_team, rows, current, locked, pool, starte
     if not trending["ok"]:
         st.caption(f"Trending adds unavailable ({trending['error']}); retried within the hour.")
     my_season_rows = [season["by_id"][r["player_id"]] for r in rows if r["player_id"] in season["by_id"]]
-    free = mark_locked(free_agents(pool, rosters), locked)  # a free agent whose game started cannot start this week
+    free = calibrate_rows(cal, mark_locked(free_agents(pool, rosters), locked))  # a free agent whose game started cannot start this week
     targets = waiver_targets(free, rows, my_season_rows, season["by_id"], starters, key,
                              trending["data"] if trending["ok"] else {}, current=current)
     drops = drop_candidates(rows, my_season_rows, starters, key=key, current=current)
-    render_waiver_lists(targets, drops, week, key)
+    render_waiver_lists(targets, drops, week, key, cal)
     st.caption(f"Season values: {season['note']}. Gains are the improvement to the best lineup with the player added, assuming a free roster spot (an add costs a drop).")
 
 
@@ -2286,7 +2295,16 @@ def lock_watch(week):
         st.rerun(scope="app")
 
 
-def render_swap(swap, key="points", now=None):
+def swap_probability(cal, swap, key):
+    """P(the incoming player outscores the outgoing one), from each player's error spread."""
+    player, out = swap["in"], swap["out"]
+    if out is None or swap.get("out_reason"):
+        return None  # replacing nobody, or someone who cannot play, is not a gamble
+    return swap_confidence(player.get(key, 0) - out.get(key, 0), error_sd(cal, player["position"], player.get(key, 0)),
+                           error_sd(cal, out["position"], out.get(key, 0)))
+
+
+def render_swap(swap, key="points", now=None, cal=None):
     player, out = swap["in"], swap["out"]
     if out and swap["out_reason"]:
         out_txt = f" for <b>{out['name']}</b> <span style='color:#f87171'>({swap['out_reason']})</span>"
@@ -2294,7 +2312,7 @@ def render_swap(swap, key="points", now=None):
         out_txt = f" for <b>{out['name']}</b> ({out.get(key, 0):.1f})"
     else:
         out_txt = " into an empty slot"
-    flip = " <span class='chip' style='color:#fbbf24'>COIN FLIP</span>" if swap["coin_flip"] else ""
+    flip = confidence_html(swap_probability(cal, swap, key)) if cal else (" <span class='chip' style='color:#fbbf24'>COIN FLIP</span>" if swap["coin_flip"] else "")
     due = deadline_html(swap_deadline(swap), now or datetime.now(ET))
     color = "#00e0a4" if swap["delta"] >= 0 else "#f87171"
     st.markdown(
@@ -2302,6 +2320,33 @@ def render_swap(swap, key="points", now=None):
         f" · <span class='mono' style='color:{color}'>{swap['delta']:+.1f}</span>{status_badge(player)}{flip}{due}</div>",
         unsafe_allow_html=True,
     )
+
+
+@st.cache_resource(show_spinner=False)
+def load_calibration(mtime):
+    """The measured engine behaviour (src/calibration.json); identity when the file is missing."""
+    try:
+        return Calibration.load()
+    except (OSError, ValueError):
+        return Calibration({})
+
+
+def calibration_signature():
+    try:
+        return os.path.getmtime(CALIBRATION_FILE)
+    except OSError:
+        return 0.0
+
+
+def confidence_html(p):
+    """The chance a swap is the right call, in words the page has used all along."""
+    if p is None:
+        return ""
+    if p < COIN_FLIP_CONFIDENCE:
+        return f" <span class='chip' style='color:#fbbf24'>COIN FLIP {p:.0%}</span>"
+    if p < LEAN_CONFIDENCE:
+        return f" <span class='chip' style='color:#fbbf24'>LEAN {p:.0%}</span>"
+    return f" <span class='chip' style='color:#00e0a4'>{p:.0%}</span>"
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -2316,6 +2361,23 @@ def log_signature(path):
         return stat.st_mtime, stat.st_size
     except OSError:
         return 0, 0
+
+
+def render_decision_curves(cal, records):
+    """How often the higher projection wins, by gap: the 2023-25 fit beside this season's log."""
+    fitted = {tuple(b["gap"]): b for b in cal.data.get("decision_curve") or []}
+    observed = {tuple(b["gap"]): b for b in decision_curve(records)}
+    if not fitted and not any(b["n"] for b in observed.values()):
+        return
+    lines = []
+    for gap in sorted(set(fitted) | set(observed)):
+        fit = fitted.get(gap, {}).get("observed")
+        obs = observed.get(gap, {})
+        fit_txt = f"{fit:.0%}" if fit is not None else "-"
+        obs_txt = f"{obs['observed']:.0%} (n={obs['n']})" if obs.get("n") else "-"
+        lines.append(f"gap {gap[0]}-{gap[1]:<2} pts: fitted {fit_txt} · this season {obs_txt}")
+    st.markdown("<span class='rank-num'>Right call by projection gap (share of same-position pairs where the higher projection scored more)</span>", unsafe_allow_html=True)
+    st.markdown("<div class='mono' style='font-size:0.82rem'>" + "<br>".join(lines) + "</div>", unsafe_allow_html=True)
 
 
 def render_accuracy(report):
@@ -2374,9 +2436,10 @@ if mode == "Start/Sit":
     st.session_state.ss_locked_snapshot = locked_now
     lock_watch(ss_week)
     # Locks are stamped before the lineups are built so every dict downstream carries the flag
-    rows = mark_locked(roster_rows(my_team.get("players") or [], pool, board_by_id, byes, ss_week), locked_now)
+    cal = load_calibration(calibration_signature())
+    rows = calibrate_rows(cal, mark_locked(roster_rows(my_team.get("players") or [], pool, board_by_id, byes, ss_week), locked_now))
     rows_by_id = {r["player_id"]: r for r in rows}
-    ss_key = "adjusted_points" if st.session_state.ss_adjust_pref else "points"
+    ss_key = "calibrated_adjusted_points" if st.session_state.ss_adjust_pref else "calibrated_points"
     current = current_lineup(my_team.get("starters") or [], roster_positions, rows_by_id)
     optimal = optimal_lineup(rows, ss_starters, key=ss_key)
     reachable = reachable_lineup(rows, current, ss_starters, key=ss_key)
@@ -2412,7 +2475,7 @@ if mode == "Start/Sit":
     if swaps:
         st.markdown("<div class='sec-head'>Swaps</div>", unsafe_allow_html=True)
         for swap in swaps:
-            render_swap(swap, ss_key, now)
+            render_swap(swap, ss_key, now, cal)
         gain = expected_points(reachable, ss_key) - expected_points(current, ss_key)
         st.markdown(f"<span class='rank-num'>Total: {gain:+.1f} projected points from the players who can play. Swaps under {COIN_FLIP_POINTS} points are inside projection noise.</span>", unsafe_allow_html=True)
     elif all_locked:
@@ -2435,11 +2498,11 @@ if mode == "Start/Sit":
     with st.expander("Per-source points and confidence", expanded=False):
         for row in sorted(rows, key=lambda r: -r["points"]):
             by_source = " · ".join(f"{SOURCE_LABELS.get(s, s)} {v}" for s, v in (row.get("points_by_source") or {}).items()) or "no feed"
-            fp = f" · FP {row['fp_week_pos_rank']} (rank {row['fp_week_rank']}, spread ±{row['fp_week_rank_std']:.0f})" if row.get("fp_week_pos_rank") else ""
+            fp = f" · FP {row['fp_week_pos_rank']} (rank {row['fp_week_rank']}, spread ±{row['fp_week_rank_std']:.0f}{', grade ' + row['fp_grade'] if row.get('fp_grade') else ''})" if row.get("fp_week_pos_rank") else ""
             st.markdown(f"<div class='mono' style='font-size:0.82rem'>{row['name']}: {by_source}{fp}</div>", unsafe_allow_html=True)
 
     with st.expander("Waiver targets", expanded=False):
-        render_waivers(ctx["league"], ctx["rosters"], my_team, rows, current, locked_now, pool, ss_starters, ss_key, ss_week)
+        render_waivers(ctx["league"], ctx["rosters"], my_team, rows, current, locked_now, pool, ss_starters, ss_key, ss_week, cal)
 
     with st.expander("Matchups and accuracy", expanded=False):
         with_lines = sorted((c for c in week_context.items() if c[1].get("implied") is not None), key=lambda kv: -kv[1]["implied"])
@@ -2461,6 +2524,7 @@ if mode == "Start/Sit":
         st.markdown("<div class='sec-head'>Projection accuracy</div>", unsafe_allow_html=True)
         log_records = read_records(LOG_FILE)
         render_accuracy(load_accuracy(LOG_FILE, *log_signature(LOG_FILE)))
+        render_decision_curves(cal, log_records)
         # Only weeks that have been played can be recorded; the live NFL week is the gate
         nfl_now = load_nfl_state(0)
         live_week = lineup_week(nfl_now["data"]) if nfl_now["ok"] else 1

@@ -1,0 +1,228 @@
+{
+ "id": "evt1",
+ "sport_key": "americanfootball_nfl",
+ "commence_time": "2026-09-13T17:00:00Z",
+ "home_team": "Indianapolis Colts",
+ "away_team": "Atlanta Falcons",
+ "bookmakers": [
+  {
+   "key": "draftkings",
+   "title": "DraftKings",
+   "markets": [
+    {
+     "key": "player_reception_yds",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Over",
+       "description": "Michael Pittman",
+       "price": -115,
+       "point": 52.5
+      },
+      {
+       "name": "Under",
+       "description": "Michael Pittman",
+       "price": -105,
+       "point": 52.5
+      },
+      {
+       "name": "Over",
+       "description": "Drake London",
+       "price": -110,
+       "point": 70.5
+      },
+      {
+       "name": "Under",
+       "description": "Drake London",
+       "price": -110,
+       "point": 70.5
+      }
+     ]
+    },
+    {
+     "key": "player_receptions",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Over",
+       "description": "Michael Pittman",
+       "price": -120,
+       "point": 4.5
+      },
+      {
+       "name": "Under",
+       "description": "Michael Pittman",
+       "price": -100,
+       "point": 4.5
+      }
+     ]
+    },
+    {
+     "key": "player_pass_yds",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Over",
+       "description": "Daniel Jones",
+       "price": -110,
+       "point": 224.5
+      },
+      {
+       "name": "Under",
+       "description": "Daniel Jones",
+       "price": -110,
+       "point": 224.5
+      }
+     ]
+    },
+    {
+     "key": "player_anytime_td",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Yes",
+       "description": "Michael Pittman",
+       "price": 165
+      },
+      {
+       "name": "Yes",
+       "description": "Drake London",
+       "price": 120
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "key": "fanduel",
+   "title": "FanDuel",
+   "markets": [
+    {
+     "key": "player_reception_yds",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Over",
+       "description": "Michael Pittman",
+       "price": -114,
+       "point": 54.5
+      },
+      {
+       "name": "Under",
+       "description": "Michael Pittman",
+       "price": -106,
+       "point": 54.5
+      },
+      {
+       "name": "Over",
+       "description": "Drake London",
+       "price": -114,
+       "point": 69.5
+      },
+      {
+       "name": "Under",
+       "description": "Drake London",
+       "price": -106,
+       "point": 69.5
+      }
+     ]
+    },
+    {
+     "key": "player_receptions",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Over",
+       "description": "Michael Pittman",
+       "price": -125,
+       "point": 4.5
+      },
+      {
+       "name": "Under",
+       "description": "Michael Pittman",
+       "price": -105,
+       "point": 4.5
+      }
+     ]
+    },
+    {
+     "key": "player_pass_yds",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Over",
+       "description": "Daniel Jones",
+       "price": -114,
+       "point": 229.5
+      },
+      {
+       "name": "Under",
+       "description": "Daniel Jones",
+       "price": -106,
+       "point": 229.5
+      }
+     ]
+    },
+    {
+     "key": "player_anytime_td",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Yes",
+       "description": "Michael Pittman",
+       "price": 150
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "key": "betmgm",
+   "title": "BetMGM",
+   "markets": [
+    {
+     "key": "player_reception_yds",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Over",
+       "description": "Michael Pittman",
+       "price": -105,
+       "point": 52.5
+      },
+      {
+       "name": "Under",
+       "description": "Michael Pittman",
+       "price": -115,
+       "point": 52.5
+      },
+      {
+       "name": "Over",
+       "description": "Nobody Known",
+       "price": -110,
+       "point": 30.5
+      }
+     ]
+    },
+    {
+     "key": "player_pass_yds",
+     "last_update": "2026-09-10T12:00:00Z",
+     "outcomes": [
+      {
+       "name": "Over",
+       "description": "Daniel Jones",
+       "price": -110,
+       "point": 225.5
+      },
+      {
+       "name": "Under",
+       "description": "Daniel Jones",
+       "price": -110,
+       "point": 225.5
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

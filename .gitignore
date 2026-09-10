@@ -226,3 +226,9 @@ __marimo__/
 
 # macOS
 .DS_Store
+
+# backtest and props state
+.backtest_cache/
+.props_log.jsonl
+.props.json
+.props_pull.json

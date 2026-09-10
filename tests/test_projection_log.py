@@ -167,3 +167,22 @@ def test_feed_weights_use_only_player_weeks_every_feed_covered():
     recs.append({"kind": "actual", "season": "2026", "week": 3, "league_id": LEAGUE, "player_id": "x", "actual": 10.0})
     weights = accuracy_report(recs)["weights"]
     assert weights["espn"] > weights["fp"] > weights["sleeper"] and abs(sum(weights.values()) - 1) < 0.01
+
+
+def test_decision_curve_counts_correct_calls_by_projection_gap():
+    from projection_log import decision_curve
+
+    recs = [
+        {"kind": "projection", "season": "2026", "week": 3, "league_id": LEAGUE, "player_id": "1", "position": "WR", "blend": 20.0, "points_by_source": {}},
+        {"kind": "projection", "season": "2026", "week": 3, "league_id": LEAGUE, "player_id": "2", "position": "WR", "blend": 15.0, "points_by_source": {}},
+        {"kind": "projection", "season": "2026", "week": 3, "league_id": LEAGUE, "player_id": "3", "position": "WR", "blend": 8.0, "points_by_source": {}},
+        {"kind": "projection", "season": "2026", "week": 3, "league_id": LEAGUE, "player_id": "4", "position": "RB", "blend": 9.5, "points_by_source": {}},
+        {"kind": "actual", "season": "2026", "week": 3, "league_id": LEAGUE, "player_id": "1", "actual": 18.0},
+        {"kind": "actual", "season": "2026", "week": 3, "league_id": LEAGUE, "player_id": "2", "actual": 21.0},
+        {"kind": "actual", "season": "2026", "week": 3, "league_id": LEAGUE, "player_id": "3", "actual": 9.0},
+        {"kind": "actual", "season": "2026", "week": 3, "league_id": LEAGUE, "player_id": "4", "actual": 1.0},
+    ]
+    curve = {tuple(b["gap"]): b for b in decision_curve(recs)}
+    assert curve[(5, 8)] == {"gap": [5, 8], "observed": 0.5, "n": 2}  # 20 vs 15 was wrong, 15 vs 8 was right
+    assert curve[(8, 99)]["observed"] == 1.0 and curve[(8, 99)]["n"] == 1  # 20 vs 8
+    assert curve[(1, 2)]["n"] == 0 and curve[(1, 2)]["observed"] is None  # the RB pairs with nobody
