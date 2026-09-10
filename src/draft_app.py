@@ -773,10 +773,13 @@ if st.session_state.pp_fetch_requested:
     # The only place props are fetched: once, on the button, before any widget renders (credits are finite)
     st.session_state.pp_fetch_requested = False
     fetched = fetch_week_props(int(st.session_state.pp_week_pref or 1), st.session_state.pp_markets_pref)
-    st.session_state.pp_legs = fetched["legs"]
     st.session_state.pp_fetch_note = fetched["note"]
     st.session_state.pp_credits = fetched["remaining"]
-    save_props_pull(int(st.session_state.pp_week_pref or 1), fetched)
+    if fetched["legs"]:
+        st.session_state.pp_legs = fetched["legs"]
+        save_props_pull(int(st.session_state.pp_week_pref or 1), fetched)
+    else:  # a refused or empty pull keeps whatever the session already had; the note says what happened
+        st.session_state.pp_fetch_note = fetched["note"] + (" · kept the previous pull" if st.session_state.pp_legs else "")
 if "pick_log" not in st.session_state:
     st.session_state.pick_log = []
 if "pos_filter" not in st.session_state:
@@ -825,12 +828,23 @@ if team_names and st.session_state.get("team_pref") not in team_names:
 active_team = st.session_state.get("team_pref") if manual_cfg else None
 mine_label = active_team if manual_cfg else "Mine"
 
+# ---- Mode, decided before anything loads (the widget itself renders at the top of the page) ----
+# A synced Sleeper draft that is live pins Draft mode so it cannot be bumped; a manual
+# (Yahoo/ESPN) draft is "drafting" until every pick is logged, which can be forever, so it does not.
+_info = st.session_state.draft_info or {}
+draft_live = _info.get("status") == "drafting" and not _info.get("manual")
+st.session_state.setdefault("app_mode", "Draft")
+if draft_live:
+    st.session_state.app_mode = "Draft"
+mode = st.session_state.app_mode or "Draft"
+
 # While a feed is missing the cache key rolls every DEGRADED_RETRY_SECONDS so it retries
 retry_bucket = (
     int(time.time() // DEGRADED_RETRY_SECONDS) if st.session_state.get("board_degraded") else 0
 )
 try:
-    board, projection_note, degraded = load_board(
+    # Props prices off the weekly pool, so the season board (the slowest load) is skipped there
+    board, projection_note, degraded = ([], "", False) if mode == "Props" else load_board(
         SCORING_LABELS[st.session_state.scoring_pref],
         num_teams,
         scoring_items,
@@ -1013,6 +1027,13 @@ draft_teams = _draft_settings.get("teams") or num_teams
 
 
 # ==================== SIDEBAR ====================
+# ---- Mode tabs across the top. One mode renders per run: st.tabs would run all three, and each
+# mode loads its own feeds (and, for Props, spends credits on a click), so this is a control, not tabs.
+if draft_live:
+    st.caption("Draft is live: Start/Sit and Props unlock when it ends.")
+else:
+    st.segmented_control("Mode", ["Draft", "Start/Sit", "Props"], key="app_mode", label_visibility="collapsed")
+
 with st.sidebar:
     # ---- Layout: compact rows for a narrow window (side by side with the draft room).
     # Follows the browser width unless the owner flips the toggle.
@@ -1071,22 +1092,6 @@ with st.sidebar:
                     args=(name,),
                 )
 
-    # ---- Mode toggle (top); hidden while a synced Sleeper draft is live so it cannot be bumped.
-    # A manual (Yahoo/ESPN) draft is "drafting" until every pick is logged, which can be forever,
-    # so it never hides the other modes.
-    _info = st.session_state.draft_info or {}
-    draft_live = _info.get("status") == "drafting" and not _info.get("manual")
-    if draft_live:
-        mode = "Draft"
-    else:
-        st.markdown("<div class='sec-head'>Mode</div>", unsafe_allow_html=True)
-        mode = st.radio(
-            "App mode",
-            options=["Draft", "Start/Sit", "Props"],
-            label_visibility="collapsed",
-            key="app_mode",
-        )
-        st.divider()
 
     if mode == "Start/Sit":
         # ---- Which league and week the lineup page reads; never touches the draft connection ----
@@ -1409,85 +1414,86 @@ with st.sidebar:
                     unsafe_allow_html=True,
                 )
 
-    # ---- Player Search ----
-    st.markdown("<div class='sec-head'>Player Search</div>", unsafe_allow_html=True)
-    news_options = {f"{p['name']} · {p['position']} {p['team']}": p for p in board}
-    choice = st.selectbox(
-        "Find a player", options=list(news_options.keys()), label_visibility="collapsed"
-    )
-    if st.button("Get news", type="primary", use_container_width=True):
-        picked = news_options[choice]
-        with st.spinner(f"Searching outlets for {picked['name']}..."):
-            try:
-                result = cached_news(picked["name"], picked["team"], picked["position"])
-                st.session_state.news_summary = result["summary"]
-                st.session_state.news_sources = result.get("sources", {})
-                st.session_state.news_player = picked["name"]
-                st.session_state.news_photo = sleeper_photo(picked.get("player_id"))
-            except Exception as e:
-                st.error(f"News unavailable (is ANTHROPIC_API_KEY set in .env?): {e}")
+    if board:  # Props mode skips the season board; these two sections need it
+        # ---- Player Search ----
+        st.markdown("<div class='sec-head'>Player Search</div>", unsafe_allow_html=True)
+        news_options = {f"{p['name']} · {p['position']} {p['team']}": p for p in board}
+        choice = st.selectbox(
+            "Find a player", options=list(news_options.keys()), label_visibility="collapsed"
+        )
+        if st.button("Get news", type="primary", use_container_width=True):
+            picked = news_options[choice]
+            with st.spinner(f"Searching outlets for {picked['name']}..."):
+                try:
+                    result = cached_news(picked["name"], picked["team"], picked["position"])
+                    st.session_state.news_summary = result["summary"]
+                    st.session_state.news_sources = result.get("sources", {})
+                    st.session_state.news_player = picked["name"]
+                    st.session_state.news_photo = sleeper_photo(picked.get("player_id"))
+                except Exception as e:
+                    st.error(f"News unavailable (is ANTHROPIC_API_KEY set in .env?): {e}")
 
-    # News result — directly under Player Search
-    if st.session_state.get("news_summary"):
-        with st.expander(
-            f"📰 News: {st.session_state.get('news_player', '')}", expanded=True
-        ):
-            if st.session_state.get("news_photo"):
-                st.image(st.session_state.news_photo, width=70)
-            st.markdown(
-                f"<div style='color:#ffffff;'>{st.session_state.news_summary}</div>",
-                unsafe_allow_html=True,
-            )
-            sources = st.session_state.get("news_sources", {})
-            if sources:
+        # News result — directly under Player Search
+        if st.session_state.get("news_summary"):
+            with st.expander(
+                f"📰 News: {st.session_state.get('news_player', '')}", expanded=True
+            ):
+                if st.session_state.get("news_photo"):
+                    st.image(st.session_state.news_photo, width=70)
                 st.markdown(
-                    "<div style='color:#7d8590;font-size:0.7rem;margin-top:8px;"
-                    "text-transform:uppercase;letter-spacing:1px'>Sources</div>",
+                    f"<div style='color:#ffffff;'>{st.session_state.news_summary}</div>",
                     unsafe_allow_html=True,
                 )
-                for url, title in sources.items():
-                    short = title[:40] + "…" if len(title) > 40 else title
+                sources = st.session_state.get("news_sources", {})
+                if sources:
                     st.markdown(
-                        f"<a href='{url}' target='_blank' "
-                        f"style='color:#38bdf8;font-size:0.78rem'>{short}</a>",
+                        "<div style='color:#7d8590;font-size:0.7rem;margin-top:8px;"
+                        "text-transform:uppercase;letter-spacing:1px'>Sources</div>",
                         unsafe_allow_html=True,
                     )
+                    for url, title in sources.items():
+                        short = title[:40] + "…" if len(title) > 40 else title
+                        st.markdown(
+                            f"<a href='{url}' target='_blank' "
+                            f"style='color:#38bdf8;font-size:0.78rem'>{short}</a>",
+                            unsafe_allow_html=True,
+                        )
 
-    # ---- Ask the Analyst ----
-    st.markdown("<div class='sec-head'>Ask the Analyst</div>", unsafe_allow_html=True)
-    user_q = st.text_input(
-        "Ask a fantasy question",
-        label_visibility="collapsed",
-        placeholder="e.g. Should I start my WR2 this week?",
-    )
-    if st.button("Ask", use_container_width=True) and user_q:
-        from news import ask_question
+        # ---- Ask the Analyst ----
+        st.markdown("<div class='sec-head'>Ask the Analyst</div>", unsafe_allow_html=True)
+        user_q = st.text_input(
+            "Ask a fantasy question",
+            label_visibility="collapsed",
+            placeholder="e.g. Should I start my WR2 this week?",
+        )
+        if st.button("Ask", use_container_width=True) and user_q:
+            from news import ask_question
 
-        picks_made = (st.session_state.draft_info or {}).get("picks") or len(drafted_keys)
-        with st.spinner("Thinking..."):
-            try:
-                st.session_state.answer = ask_question(
-                    user_q,
-                    league_size=num_teams,
-                    scoring=scoring_label,
-                    my_roster=my_roster,
-                    taken=picks_made,
-                    round_num=picks_made // draft_teams + 1,
-                    pick_in_round=picks_made % draft_teams + 1,
-                    available=available,
-                    needs=needs,
-                    scoring_notes=scoring_summary(league["scoring_settings"]) if league else None,
+            picks_made = (st.session_state.draft_info or {}).get("picks") or len(drafted_keys)
+            with st.spinner("Thinking..."):
+                try:
+                    st.session_state.answer = ask_question(
+                        user_q,
+                        league_size=num_teams,
+                        scoring=scoring_label,
+                        my_roster=my_roster,
+                        taken=picks_made,
+                        round_num=picks_made // draft_teams + 1,
+                        pick_in_round=picks_made % draft_teams + 1,
+                        available=available,
+                        needs=needs,
+                        scoring_notes=scoring_summary(league["scoring_settings"]) if league else None,
+                    )
+                except Exception as e:
+                    st.error(f"Analyst unavailable (is ANTHROPIC_API_KEY set in .env?): {e}")
+
+        # Analyst answer — directly under Ask the Analyst
+        if st.session_state.get("answer"):
+            with st.expander("💬 Analyst answer", expanded=True):
+                st.markdown(
+                    f"<div style='color:#ffffff;'>{st.session_state.answer}</div>",
+                    unsafe_allow_html=True,
                 )
-            except Exception as e:
-                st.error(f"Analyst unavailable (is ANTHROPIC_API_KEY set in .env?): {e}")
-
-    # Analyst answer — directly under Ask the Analyst
-    if st.session_state.get("answer"):
-        with st.expander("💬 Analyst answer", expanded=True):
-            st.markdown(
-                f"<div style='color:#ffffff;'>{st.session_state.answer}</div>",
-                unsafe_allow_html=True,
-            )
 # ==================== HEADER ====================
 if mode == "Props":
     subtitle = f"Props · Week {st.session_state.pp_week_pref} · " + (st.session_state.pp_fetch_note or "fetch this week's props from the sidebar")
