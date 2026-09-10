@@ -29,16 +29,25 @@ def free_agents(pool, rosters):
     return [row for pid, row in pool.items() if str(pid) not in taken]
 
 
-def best_points(rows, starters, key="points", respect_injury=True, current=None):
-    """Points of the best legal lineup. With `respect_injury` off, Out and IR players
-    count: the season view treats an injured stud as a keeper, not a hole. With
-    `current` (this week's lineup), kickoff locks apply: locked starters stay put and
-    a locked bench player or free agent cannot start (`lineup.reachable_lineup`)."""
+def best_lineup(rows, starters, key="points", respect_injury=True, current=None):
+    """The best legal lineup. With `respect_injury` off, Out and IR players count: the season
+    view treats an injured stud as a keeper, not a hole. With `current` (this week's lineup),
+    kickoff locks apply: locked starters stay put and a locked bench player or free agent
+    cannot start (`lineup.reachable_lineup`)."""
     if current is not None:
-        return lineup_points(reachable_lineup(rows, current, starters, key=key), key=key)
+        return reachable_lineup(rows, current, starters, key=key)
     if respect_injury:
-        return lineup_points(optimal_lineup(rows, starters, key=key), key=key)
-    return lineup_points(allocate_slots(rows, starters, key=key).slots, key=key)
+        return optimal_lineup(rows, starters, key=key)
+    return allocate_slots(rows, starters, key=key).slots
+
+
+def best_points(rows, starters, key="points", respect_injury=True, current=None):
+    """Points of the best legal lineup (see `best_lineup`)."""
+    return lineup_points(best_lineup(rows, starters, key, respect_injury, current), key=key)
+
+
+def _lineup_ids(slots):
+    return {r["player_id"] for rows in slots.values() for r in rows if r}
 
 
 def lineup_gain(candidate, my_rows, starters, key="points", respect_injury=True, current=None):
@@ -57,6 +66,7 @@ class _Baselines:
     """My roster and its best-lineup points, computed once for every candidate."""
     week_rows: list
     week_base: float
+    week_ids: set
     season_rows: list
     season_base: float
     season_index: dict
@@ -66,17 +76,28 @@ class _Baselines:
     current: dict | None
 
 
+def _displaced(candidate, b):
+    """The starter who leaves this week's lineup when the candidate is added, or None."""
+    with_him = _lineup_ids(best_lineup(list(b.week_rows) + [candidate], b.starters, b.key, True, b.current))
+    if candidate["player_id"] not in with_him:
+        return None
+    out = b.week_ids - with_him
+    return next((r for r in b.week_rows if r["player_id"] in out), None)
+
+
 def _target(row, b):
     season_row = b.season_index.get(str(row["player_id"]))
     season_gain = 0.0
     if season_row is not None and not is_unavailable(season_row) and not is_unavailable(row):
         season_gain = _gain_over(season_row, b.season_rows, b.season_base, b.starters, "points", False)
+    week_gain = _gain_over(row, b.week_rows, b.week_base, b.starters, b.key, True, b.current)
     return {
         "row": row,
-        "week_gain": _gain_over(row, b.week_rows, b.week_base, b.starters, b.key, True, b.current),
+        "week_gain": week_gain,
         "season_gain": season_gain,
         "has_season": season_row is not None,
         "adds": b.trending.get(str(row["player_id"]), 0),
+        "displaces": _displaced(row, b) if week_gain > 0 else None,
     }
 
 
@@ -123,6 +144,7 @@ def waiver_targets(free, my_week_rows, my_season_rows, season_index, starters, k
     b = _Baselines(
         week_rows=list(my_week_rows),
         week_base=best_points(my_week_rows, starters, key, current=current),
+        week_ids=_lineup_ids(best_lineup(my_week_rows, starters, key, True, current)),
         season_rows=list(my_season_rows),
         season_base=best_points(my_season_rows, starters, "points", respect_injury=False),
         season_index=season_index, starters=starters, key=key, trending=trending, current=current,

@@ -7,11 +7,14 @@ uses, which is where line shopping pays. Everything here is pure; `odds.py` fetc
 `props_log.py` records.
 """
 import math
+from datetime import datetime
 from statistics import median
 
 import numpy as np
 
 from calibration import correlation, count_pmf, normal_ppf, outcome_cdf
+from espn_ranks import match_key
+from lineup import can_play
 
 MARKET_STAT = {
     "player_pass_yds": "pass_yd", "player_pass_tds": "pass_td", "player_rush_yds": "rush_yd",
@@ -20,10 +23,15 @@ MARKET_STAT = {
 COUNT_MARKETS = {"player_receptions", "player_pass_tds"}
 TD_MARKET = "player_anytime_td"
 PREFERRED_BOOKS = ("draftkings", "fanduel")
-MARKET_WEIGHT = 0.7  # the books are sharp; our projection moves the centre by the rest
+MARKET_WEIGHT = 0.85  # the books are sharp; our projection moves the centre by the rest (the log re-tunes this)
 ONE_WAY_HOLD = 0.05  # a Yes-only anytime-TD price carries about this much hold; re-measured by the log
 COUNT_LINE_TO_MEAN = 1 / 3  # a Poisson's mean sits about a third above its median line
-SAFE = {"min_probability": 0.55, "min_ev": 0.02, "min_price": -200, "max_ev": 0.12, "max_legs": 2}
+# "safe" means a line-shopping edge (a book off consensus in your favour, priced with the market's own
+# centre), not our projection disagreeing with the market: the audit says those disagreements are
+# usually the market knowing something
+SAFE = {"min_probability": 0.55, "min_ev": 0.02, "min_ev_line": 0.02, "min_price": -200, "max_ev": 0.12, "max_legs": 2}
+DEFENSE_SUFFIXES = ("D/ST", "Defense")
+BISECTION_STEPS = 40
 MC_DRAWS = 20000
 MAX_RHO = 0.95
 
@@ -83,6 +91,38 @@ def centre(consensus_line, projection, k50, weight=MARKET_WEIGHT):
     """Where the outcome's median sits: the market line, nudged toward our calibrated median."""
     ours = projection * k50
     return ours if consensus_line is None else weight * consensus_line + (1 - weight) * ours
+
+
+def _over_probability(cal, position, market, projected, centre_value, line):
+    """P(over | not a push) at `line` for a centre, or None when it cannot be priced."""
+    probs = p_over(cal, position, market, projected, centre_value, line)
+    if probs is None:
+        return None
+    over, push, _ = probs
+    return no_push_probability(over, push)
+
+
+def market_centre(cal, position, market, projected, consensus_line, p_market):
+    """The centre at which our shape prices the consensus line to the market's probability
+    (found by bisection, since P(over) rises with the centre). Books carry the information in the
+    price as much as the line: passing TDs post 1.5 at +145, a 39% event, and receptions sit off
+    -110 all the time. Without a two-sided price the line itself is the centre (a third above it
+    for counts, a Poisson's mean over its median)."""
+    if market == TD_MARKET:
+        return None if p_market is None else -math.log(1 - p_market)
+    if consensus_line is None:
+        return None
+    if p_market is None:
+        return consensus_line + COUNT_LINE_TO_MEAN if market in COUNT_MARKETS else consensus_line
+    lo, hi = 0.01, max(5.0 * (consensus_line + 1.0), 1.0)
+    at_lo, at_hi = (_over_probability(cal, position, market, projected, c, consensus_line) for c in (lo, hi))
+    if at_lo is None or at_hi is None or not at_lo <= p_market <= at_hi:
+        return None  # the shape cannot reach that probability: no honest centre exists
+    for _ in range(BISECTION_STEPS):
+        mid = (lo + hi) / 2
+        p = _over_probability(cal, position, market, projected, mid, consensus_line)
+        lo, hi = (mid, hi) if p < p_market else (lo, mid)
+    return round((lo + hi) / 2, 4)
 
 
 def _count_probabilities(pmf, line):
@@ -145,19 +185,76 @@ def stake(p, price, bankroll, fraction=0.25, cap=0.05):
     return round(min(cap, fraction * kelly_fraction(p, price)) * bankroll, 2)
 
 
-def is_safe(p, price, ev, market, rules=SAFE):
-    """Whether a leg fits the low-variance, positive-expectation brief; (ok, reason)."""
+def is_safe(p, price, ev, market, ev_line=0.0, rules=SAFE):
+    """Whether a leg fits the low-variance, positive-expectation brief; (ok, reason). The edge
+    must come from the line (`ev_line`, priced with the market's own centre), not from our
+    projection disagreeing with the market."""
     if market == TD_MARKET:
         return False, "anytime TD is never safe"
     if p < rules["min_probability"]:
         return False, f"probability under {rules['min_probability']:.0%}"
     if price < rules["min_price"]:
         return False, f"price shorter than {rules['min_price']}"
+    if ev_line < rules["min_ev_line"]:
+        return False, "no line-shopping edge"
     if ev > rules["max_ev"]:
         return False, "too good: check the line"
     if ev < rules["min_ev"]:
         return False, f"expected value under {rules['min_ev']:.0%}"
     return True, None
+
+
+# ---- pricing a whole pull ----
+
+def projection_index(pool):
+    """{normalised name: [rows]} so a prop's player name finds our projection; a clash resolves by team."""
+    index = {}
+    for row in pool.values():
+        index.setdefault(match_key(row["name"], row["position"]), []).append(row)
+    return index
+
+
+def find_projection(index, leg):
+    rows = index.get(match_key(leg["player"], "QB")) or []  # any non-DEF position: match_key only special-cases defenses
+    if len(rows) > 1:
+        rows = [r for r in rows if r.get("team") in (leg.get("home"), leg.get("away"))] or rows
+    return rows[0] if rows else None
+
+
+def parse_commence(value):
+    """The Odds API's ISO kickoff (UTC) as an aware datetime, or None for anything else."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
+    except (ValueError, TypeError, AttributeError):
+        return None
+    return parsed if parsed is not None and parsed.tzinfo is not None else None
+
+
+def _skip(leg, projection, kickoff, now):
+    if kickoff and kickoff <= now:
+        return True
+    if leg["player"].endswith(DEFENSE_SUFFIXES):
+        return True
+    return projection is None or not can_play(projection)
+
+
+def price_legs(cal, legs, index, books, now, weight=MARKET_WEIGHT):
+    """Every priceable leg on the owner's books: not kicked off, not a team defense, projected,
+    and healthy enough to play; each carries the projection's id, team and game for parlays."""
+    priced = []
+    for leg in legs:
+        kickoff = parse_commence(leg.get("commence"))
+        projection = find_projection(index, leg)
+        if _skip(leg, projection, kickoff, now):
+            continue
+        for side in (("yes",) if leg["market"] == TD_MARKET else ("over", "under")):
+            entry = price_leg(cal, leg, side, projection, weight=weight, preferred=tuple(books))
+            if entry is None:
+                continue
+            priced.append({**entry, "player_id": projection["player_id"], "team": projection.get("team"), "game": leg["event_id"], "event_id": leg["event_id"],
+                           "home": leg.get("home"), "away": leg.get("away"), "commence": leg.get("commence"), "kickoff": kickoff,
+                           "injury_status": projection.get("injury_status")})
+    return priced
 
 
 def _projected_stat(projection, market):
@@ -167,21 +264,25 @@ def _projected_stat(projection, market):
     return stats.get(MARKET_STAT[market]) or 0.0
 
 
-def _centre_for(cal, position, market, projected, consensus_line, p_market, weight):
-    """The blended centre: a median for yards, a mean for counts, a rate for touchdowns."""
+def _our_centre(cal, position, market, projected):
+    """Where our projection alone puts the centre, or None when the stat cannot be priced."""
     if market == TD_MARKET:
-        k = (cal.data.get("touchdowns") or {}).get("k", 1.0)
-        ours = k * projected
-        return ours if p_market is None else weight * -math.log(1 - p_market) + (1 - weight) * ours
+        return (cal.data.get("touchdowns") or {}).get("k", 1.0) * projected
     stat = MARKET_STAT[market]
     if market in COUNT_MARKETS:
         fit = cal.count_fit(position, stat) or {}
-        if projected < (fit.get("floor") or 0):
-            return None
-        ours = projected * fit.get("mean_ratio", 1.0)
-        return ours if consensus_line is None else weight * (consensus_line + COUNT_LINE_TO_MEAN) + (1 - weight) * ours
+        return None if projected < (fit.get("floor") or 0) else projected * fit.get("mean_ratio", 1.0)
     k50 = cal.k50(position, stat, projected)
-    return None if k50 is None else centre(consensus_line, projected, k50, weight)
+    return None if k50 is None else projected * k50
+
+
+def _centre_for(cal, position, market, projected, consensus_line, p_market, weight):
+    """The blended centre: the market-implied centre (see `market_centre`) nudged toward ours."""
+    ours = _our_centre(cal, position, market, projected)
+    if ours is None:
+        return None
+    implied = market_centre(cal, position, market, projected, consensus_line, p_market)
+    return ours if implied is None else weight * implied + (1 - weight) * ours
 
 
 def price_leg(cal, leg, side, projection, weight=MARKET_WEIGHT, preferred=PREFERRED_BOOKS):
@@ -191,21 +292,24 @@ def price_leg(cal, leg, side, projection, weight=MARKET_WEIGHT, preferred=PREFER
         return None
     market, position = leg["market"], projection["position"]
     projected = _projected_stat(projection, market)
+    over_side = consensus(leg, "yes" if side == "yes" else "over")  # the centre is pinned by the over price
     cons = consensus(leg, side)
-    blended = _centre_for(cal, position, market, projected, cons["line"], cons["p"], weight)
-    ours_only = _centre_for(cal, position, market, projected, None, None, weight)
+    blended = _centre_for(cal, position, market, projected, over_side["line"], over_side["p"], weight)
+    market_only = _centre_for(cal, position, market, projected, over_side["line"], over_side["p"], 1.0)
+    ours_only = _our_centre(cal, position, market, projected)
     if blended is None:
         return None
     best = None
     for book, line, price in book_offers(leg, side, preferred):
-        probs = p_over(cal, position, market, projected, blended, line)
-        if probs is None:
+        probs, line_probs = p_over(cal, position, market, projected, blended, line), p_over(cal, position, market, projected, market_only, line)
+        if probs is None or line_probs is None:
             continue
         over, push, under = probs
         p = over if side in ("over", "yes") else under
+        p_line = line_probs[0] if side in ("over", "yes") else line_probs[2]
         candidate = {"book": book, "line": line, "price": price, "p": round(p, 4), "push": round(push, 4), "ev": round(leg_ev(p, price, push), 4),
-                     "p_book": _book_probability(leg["books"][book], side)}
-        if best is None or candidate["ev"] > best["ev"]:
+                     "p_line": round(p_line, 4), "ev_line": round(leg_ev(p_line, price, push), 4), "p_book": _book_probability(leg["books"][book], side)}
+        if best is None or (candidate["ev_line"], candidate["ev"]) > (best["ev_line"], best["ev"]):
             best = candidate
     if best is None:
         return None

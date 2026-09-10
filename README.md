@@ -50,7 +50,7 @@ An AI analyst and player-news feature run in both modes.
 
 ### Props mode
 - **Priced player props** — this week's lines from DraftKings, FanDuel and the other US books via The Odds API, each priced with a calibrated outcome distribution centred on the market and shaped by three seasons of backtests, at the best line and price on your books, with the market's and our own probability shown.
-- **Safe-bets preset** — at least 55% to hit, at least 2% expected value, nothing shorter than -200, no anytime-TD legs, and a flag on anything that looks too good.
+- **Safe-bets preset** — a real line-shopping edge (a book off consensus in your favour) of at least 2%, at least 55% to hit, nothing shorter than -200, no anytime-TD legs, and flags on anything that looks too good or where our projection and the market disagree.
 - **Line shopping and two-leg parlays** — every book's line side by side, and a joint probability that respects same-game correlation, priced against the payout the book quotes.
 - **Bet log** — record what you placed, grade it from the box scores after the week, and see hit rate against predicted probability by market.
 

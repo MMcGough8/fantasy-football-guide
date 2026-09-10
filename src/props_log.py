@@ -16,8 +16,8 @@ LOG_FILE = os.getenv("PROPS_LOG_FILE") or os.path.join(os.path.dirname(os.path.d
 LEAGUE_ID = "props"  # the log's marker slot; props are league-independent
 STAT_FOR_MARKET = {"player_pass_yds": "pass_yd", "player_pass_tds": "pass_td", "player_rush_yds": "rush_yd", "player_receptions": "rec", "player_reception_yds": "rec_yd"}
 TD_KEYS = ("rush_td", "rec_td", "kr_td", "pr_td")
-LINE_FIELDS = ("player", "player_id", "position", "market", "side", "book", "line", "price", "p", "p_model", "p_market", "p_book", "push",
-               "ev", "consensus_line", "event_id", "home", "away")
+LINE_FIELDS = ("player", "player_id", "position", "market", "side", "book", "line", "price", "p", "p_line", "p_model", "p_market", "p_book",
+               "push", "ev", "ev_line", "consensus_line", "event_id", "home", "away")
 PROBABILITY_BUCKETS = [[0.0, 0.45], [0.45, 0.5], [0.5, 0.55], [0.55, 0.6], [0.6, 0.65], [0.65, 0.7], [0.7, 1.01]]
 WEIGHT_GRID = [round(w / 10, 1) for w in range(11)]
 

@@ -44,9 +44,18 @@ def test_waiver_targets_split_season_adds_from_streamers_and_keep_k_def_weekly()
     targets = waiver_targets(free, week_mine, season_mine, season_index, starters, "points", {"9": 500}, limit=8)
     season = [(t["row"]["player_id"], t["season_gain"], t["week_gain"], t["adds"]) for t in targets["season"]]
     assert season == [("9", 30.0, 3.0, 500)]  # WR9 beats WR2 over the season; WR8 does not
+    assert targets["season"][0]["displaces"]["player_id"] == "2"  # the WR2 he pushes out of this week's lineup
     week = [(t["row"]["player_id"], t["week_gain"]) for t in targets["week"]]
     assert week == [("8", 5.0), ("K2", 2.0)]  # WR8 is a streamer; a K is only ever a weekly play
     assert targets["season"][0]["row"]["points"] == 9  # entries carry the weekly row
+
+
+def test_displaces_covers_a_flex_cascade_and_an_empty_slot():
+    week_mine = [_row("1", "RB", 10), _row("2", "WR", 12), _row("3", "WR", 5)]
+    targets = waiver_targets([_row("9", "RB", 9)], week_mine, [], {}, {"RB": 1, "WR": 1, "FLEX": 1}, "points", {})
+    assert targets["week"][0]["displaces"]["player_id"] == "3"  # the RB takes the FLEX and pushes the weak WR out
+    empty = waiver_targets([_row("8", "TE", 6)], week_mine, [], {}, {"RB": 1, "WR": 1, "TE": 1}, "points", {})
+    assert empty["week"][0]["displaces"] is None  # an empty TE slot displaces nobody
 
 
 def test_waiver_targets_respect_the_limit_and_missing_season_rows():

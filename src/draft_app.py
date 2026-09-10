@@ -43,7 +43,8 @@ from odds import (
     select_week_events,
 )
 from props import (
-    PREFERRED_BOOKS, SAFE, TD_MARKET, american_to_decimal, is_safe, parlay_ev, parlay_probability, price_leg, stake,
+    PREFERRED_BOOKS, SAFE, TD_MARKET, american_to_decimal, is_safe, parlay_ev, parlay_probability, price_legs, projection_index,
+    stake,
 )
 from props_log import LOG_FILE as PROPS_LOG_FILE
 from props_log import bet_summary, calibration_report, grade_bets, log_lines, log_stats, record_bet
@@ -2326,8 +2327,12 @@ def waiver_row_html(entry, key, cal=None):
     row = entry["row"]
     gains = f"<span class='mono' style='color:#00e0a4'>{entry['week_gain']:+.1f} this week</span>"
     if cal and entry["week_gain"] > 0:
-        sd = error_sd(cal, row["position"], row.get(key, 0))
-        gains += confidence_html(swap_confidence(entry["week_gain"], sd, sd))
+        out = entry.get("displaces")
+        sd_in = error_sd(cal, row["position"], row.get(key, 0))
+        sd_out = error_sd(cal, out["position"], out.get(key, 0)) if out else sd_in
+        gains += confidence_html(swap_confidence(entry["week_gain"], sd_in, sd_out))
+        if out:
+            gains += f" <span class='rank-num'>for {out['name']}</span>"
     if entry["season_gain"] > 0:
         gains += f" · <span class='mono'>{entry['season_gain']:+.0f} season</span>"
     adds = f" <span class='chip'>{entry['adds']:,} adds/24h</span>" if entry["adds"] else ""
@@ -2671,56 +2676,13 @@ if mode == "Start/Sit":
 
 
 # ==================== PROPS MODE ====================
-def parse_commence(value):
-    """The Odds API's ISO kickoff (UTC) as an aware datetime, or None."""
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
-    except ValueError:
-        return None
-
-
-def projection_index(pool):
-    """{normalised name: [rows]} so a prop's player name finds our projection; a clash resolves by team."""
-    index = {}
-    for row in pool.values():
-        index.setdefault(match_key(row["name"], row["position"]), []).append(row)
-    return index
-
-
-def find_projection(index, leg):
-    rows = index.get(match_key(leg["player"], "QB")) or []
-    if len(rows) > 1:
-        rows = [r for r in rows if r.get("team") in (leg["home"], leg["away"])] or rows
-    return rows[0] if rows else None
-
-
-def price_week_legs(cal, legs, index, books, now):
-    """Every priceable leg on the owner's books: not kicked off, projected, healthy enough to play."""
-    priced = []
-    for leg in legs:
-        kickoff = parse_commence(leg.get("commence"))
-        if kickoff and kickoff <= now:
-            continue
-        projection = find_projection(index, leg)
-        if projection is None or projection.get("injury_status") in ("Out", "Doubtful") or is_unavailable(projection):
-            continue
-        for side in (("yes",) if leg["market"] == TD_MARKET else ("over", "under")):
-            entry = price_leg(cal, leg, side, projection, preferred=tuple(books))
-            if entry is None:
-                continue
-            priced.append({**entry, "player_id": projection["player_id"], "team": projection.get("team"), "game": leg["event_id"],
-                           "home": leg["home"], "away": leg["away"], "commence": leg.get("commence"), "kickoff": kickoff,
-                           "injury_status": projection.get("injury_status"), "key": f"{leg['player']} {MARKET_LABELS[leg['market']]} {SIDE_LABELS[side]}{'' if entry['line'] is None else ' ' + f'{entry['line']:g}'}"})
-    return priced
-
-
 def prop_flags(entry):
     flags = []
     if entry.get("injury_status") == "Questionable":
         flags.append("Q")
     if entry["edge"] >= 1.5:
         flags.append(f"+{entry['edge']:g} vs consensus")
-    ok, reason = is_safe(entry["p"], entry["price"], entry["ev"], entry["market"])
+    ok, reason = is_safe(entry["p"], entry["price"], entry["ev"], entry["market"], entry["ev_line"])
     if reason == "too good: check the line":
         flags.append("CHECK LINE")
     if entry.get("p_model") is not None and entry.get("p_market") is not None and abs(entry["p_model"] - entry["p_market"]) >= MODEL_MARKET_GAP:
@@ -2736,25 +2698,41 @@ def prop_row_html(entry, bankroll):
     money = stake(entry["p"], entry["price"], bankroll)
     stake_txt = f" · stake ${money:.0f}" if money else ""
     flags = "".join(f" <span class='chip' style='color:#fbbf24'>{f}</span>" for f in prop_flags(entry))
+    line_ev = entry.get("ev_line", 0.0)
     return (
-        f"<div style='margin:3px 0'>{badge(entry['position'])} <b>{entry['player']}</b> <span class='rank-num'>{entry.get('team') or ''} · {entry['away']} at {entry['home']} {when}</span>"
+        f"<div style='margin:3px 0'>{badge(entry['position'])} <b>{entry['player']}</b> <span class='rank-num'>{entry.get('team') or ''} · {entry.get('away') or '?'} at {entry.get('home') or '?'} {when}</span>"
         f" · {MARKET_LABELS[entry['market']]} {SIDE_LABELS[entry['side']]}{line} · <b>{BOOK_LABELS.get(entry['book'], entry['book'])}</b> <span class='mono'>{entry['price']:+d}</span>"
         f" · P <span class='mono'>{entry['p']:.0%}</span><span class='rank-num'>{market}{ours}</span> · fair {entry['fair']:+d}"
-        f" · EV <span class='mono' style='color:{'#00e0a4' if entry['ev'] > 0 else '#f87171'}'>{entry['ev']:+.1%}</span>{stake_txt}{flags}</div>"
+        f" · line edge <span class='mono' style='color:{'#00e0a4' if line_ev > 0 else '#f87171'}'>{line_ev:+.1%}</span>"
+        f" · with our model <span class='mono' style='color:{'#00e0a4' if entry['ev'] > 0 else '#f87171'}'>{entry['ev']:+.1%}</span>{stake_txt}{flags}</div>"
     )
 
 
 def render_props_board(priced, safe_only, bankroll):
-    rows = [e for e in priced if not safe_only or is_safe(e["p"], e["price"], e["ev"], e["market"])[0]]
-    rows.sort(key=lambda e: -e["ev"])
-    st.markdown("<div class='sec-head'>Legs</div>", unsafe_allow_html=True)
-    if not rows:
-        st.info("Nothing clears the safe preset on your books this week." if safe_only else "No priceable legs.")
-    for entry in rows[:MAX_BOARD_ROWS]:
+    """Two lists. Line shopping: a book off consensus in your favour, priced with the market's own
+    centre (the audit's proven edge). Model edges: our projection disagrees with the market, always
+    a check-the-news situation, hidden by the safe preset."""
+    main = [e for e in priced if e["market"] != TD_MARKET]
+    shop = sorted((e for e in main if e["ev_line"] >= SAFE["min_ev_line"] and (not safe_only or is_safe(e["p"], e["price"], e["ev"], e["market"], e["ev_line"])[0])), key=lambda e: -e["ev_line"])
+    model = [] if safe_only else sorted((e for e in main if e["ev"] >= SAFE["min_ev"] and e["ev_line"] < SAFE["min_ev_line"]), key=lambda e: -e["ev"])
+    touchdowns = sorted((e for e in priced if e["market"] == TD_MARKET and e["ev"] >= SAFE["min_ev"]), key=lambda e: -e["p"])
+    st.markdown("<div class='sec-head'>Line shopping</div>", unsafe_allow_html=True)
+    if not shop:
+        st.info("No book is off consensus in your favour on your books this week." if not safe_only else "Nothing clears the safe preset on your books this week.")
+    for entry in shop[:MAX_BOARD_ROWS]:
         st.markdown(prop_row_html(entry, bankroll), unsafe_allow_html=True)
-    if len(rows) > MAX_BOARD_ROWS:
-        st.caption(f"{len(rows) - MAX_BOARD_ROWS} more below the cut.")
-    return rows
+    if len(shop) > MAX_BOARD_ROWS:
+        st.caption(f"{len(shop) - MAX_BOARD_ROWS} more line-shopping legs below the cut.")
+    if model:
+        st.markdown("<div class='sec-head'>Model edges (our projection disagrees with the market)</div>", unsafe_allow_html=True)
+        for entry in model[:MAX_BOARD_ROWS // 2]:
+            st.markdown(prop_row_html(entry, bankroll), unsafe_allow_html=True)
+    if touchdowns:
+        with st.expander(f"Anytime touchdown ({len(touchdowns)} legs above break-even, long shots, never for the bankroll)", expanded=False):
+            st.caption("A Yes-only market cannot be de-vigged, so these prices carry a guessed hold and the edges are soft. Most likely first.")
+            for entry in touchdowns[:MAX_BOARD_ROWS // 2]:
+                st.markdown(prop_row_html(entry, bankroll), unsafe_allow_html=True)
+    return shop + model + touchdowns
 
 
 def render_line_shopping(legs, player):
@@ -2863,7 +2841,9 @@ def render_props_mode():
             st.error(f"Couldn't build week {week} projections: {e}")
             st.stop()
         cal = load_calibration(calibration_signature())
-        priced = price_week_legs(cal, legs, projection_index(pool), books, datetime.now(timezone.utc))
+        priced = price_legs(cal, legs, projection_index(pool), books, datetime.now(timezone.utc))
+        for entry in priced:
+            entry["key"] = f"{entry['player']} {MARKET_LABELS[entry['market']]} {SIDE_LABELS[entry['side']]}{'' if entry['line'] is None else ' ' + f'{entry['line']:g}'}"
         pull_id = st.session_state.pp_fetch_note
         if pull_id and (SEASON, week, pull_id) not in st.session_state.pp_logged:
             try:
