@@ -116,7 +116,9 @@ st.markdown(
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
 .stApp { background: radial-gradient(1200px 600px at 20% -10%, #14203a 0%, #0b0f17 55%, #080b11 100%); }
 .stApp > div, [data-testid="stMarkdownContainer"], [data-testid="stSidebar"] * { color: #ffffff; }
-[data-baseweb="select"] *, [role="listbox"] *, .stTextInput input { color: #1a1a1a !important; }
+/* inputs and dropdowns follow the dark theme; a light-theme-era rule once forced #1a1a1a here and made typed text invisible */
+.stTextInput input, .stNumberInput input, .stTextArea textarea, [data-baseweb="select"] *, [data-baseweb="popover"] [role="listbox"] * { color: #e6edf3 !important; }
+.stTextInput input::placeholder, .stNumberInput input::placeholder { color: #7d8794 !important; }
 header[data-testid="stHeader"] { background: transparent; }
 html, body, [class*="css"] { font-family: 'Chakra Petch', sans-serif; }
 .cc-title { font-weight:700; font-size:1.5rem; letter-spacing:2px; text-transform:uppercase; color:#e6edf3; margin-bottom:0; }
