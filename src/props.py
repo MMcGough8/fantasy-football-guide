@@ -11,7 +11,7 @@ from statistics import median
 
 import numpy as np
 
-from calibration import correlation, count_pmf, normal_ppf, outcome_cdf, td_probability
+from calibration import correlation, count_pmf, normal_ppf, outcome_cdf
 
 MARKET_STAT = {
     "player_pass_yds": "pass_yd", "player_pass_tds": "pass_td", "player_rush_yds": "rush_yd",
@@ -39,8 +39,8 @@ def implied_probability(price):
 
 
 def fair_american(p):
-    """The break-even American price for a probability."""
-    decimal = 1 / p
+    """The break-even American price for a probability (clamped away from 0 and 1)."""
+    decimal = 1 / min(max(p, 1e-4), 1 - 1e-4)
     return int(round((decimal - 1) * 100)) if decimal >= 2 else -int(round(100 / (decimal - 1)))
 
 
@@ -59,6 +59,8 @@ def one_way_probability(price, hold=ONE_WAY_HOLD):
 def _book_probability(offers, side):
     """This book's de-vigged probability for `side`, or None without the other side."""
     if side == "yes":
+        if "yes" in offers and "no" in offers:
+            return devig(offers["yes"][1], offers["no"][1])[0]
         return one_way_probability(offers["yes"][1]) if "yes" in offers else None
     if "over" in offers and "under" in offers:
         over, under = devig(offers["over"][1], offers["under"][1])
@@ -114,15 +116,6 @@ def book_offers(leg, side, preferred=PREFERRED_BOOKS):
     return [(book, *leg["books"][book][side]) for book in preferred if side in leg["books"].get(book, {})]
 
 
-def best_price(leg, side, preferred=PREFERRED_BOOKS):
-    """The best offer on the owner's books: the friendlier line first, then the higher payout."""
-    offers = book_offers(leg, side, preferred)
-    if not offers:
-        return None
-    line_sign = -1 if side == "over" else 1  # an over wants the lowest line, an under the highest
-    return max(offers, key=lambda o: (line_sign * (o[1] or 0), american_to_decimal(o[2])))
-
-
 def edge_vs_consensus(book_line, consensus_line, side):
     """Yards (or receptions) of room the book gives beyond the consensus, positive when friendly."""
     if book_line is None or consensus_line is None:
@@ -130,9 +123,14 @@ def edge_vs_consensus(book_line, consensus_line, side):
     return consensus_line - book_line if side == "over" else book_line - consensus_line
 
 
-def leg_ev(p, price):
-    """Expected profit per dollar staked."""
-    return p * (american_to_decimal(price) - 1) - (1 - p)
+def leg_ev(p, price, push=0.0):
+    """Expected profit per dollar staked; a push returns the stake."""
+    return p * (american_to_decimal(price) - 1) - (1 - p - push)
+
+
+def no_push_probability(p, push):
+    """P(win) given the bet is not a push: what fair odds and stakes condition on."""
+    return p if push >= 1 else p / (1 - push)
 
 
 def kelly_fraction(p, price):
@@ -205,16 +203,19 @@ def price_leg(cal, leg, side, projection, weight=MARKET_WEIGHT, preferred=PREFER
             continue
         over, push, under = probs
         p = over if side in ("over", "yes") else under
-        candidate = {"book": book, "line": line, "price": price, "p": round(p, 4), "push": round(push, 4), "ev": round(leg_ev(p, price), 4)}
+        candidate = {"book": book, "line": line, "price": price, "p": round(p, 4), "push": round(push, 4), "ev": round(leg_ev(p, price, push), 4),
+                     "p_book": _book_probability(leg["books"][book], side)}
         if best is None or candidate["ev"] > best["ev"]:
             best = candidate
     if best is None:
         return None
     model = p_over(cal, position, market, projected, ours_only, best["line"]) if ours_only else None
     p_model = None if model is None else round(model[0] if side in ("over", "yes") else model[2], 4)
+    win = no_push_probability(best["p"], best["push"])
     return {
         **best, "p_market": None if cons["p"] is None else round(cons["p"], 4), "p_model": p_model,
-        "fair": fair_american(best["p"]), "consensus_line": cons["line"], "edge": edge_vs_consensus(best["line"], cons["line"], side),
+        "p_book": None if best["p_book"] is None else round(best["p_book"], 4), "p_win": round(win, 4),
+        "fair": fair_american(win), "consensus_line": cons["line"], "edge": edge_vs_consensus(best["line"], cons["line"], side),
         "books": cons["books"], "market": market, "side": side, "player": leg["player"], "position": position,
     }
 
@@ -224,8 +225,8 @@ def price_leg(cal, leg, side, projection, weight=MARKET_WEIGHT, preferred=PREFER
 def leg_relation(a, b):
     if a["player"] == b["player"]:
         return "same_player"
-    if a.get("game") != b.get("game"):
-        return "cross_game"
+    if not a.get("game") or not b.get("game") or a.get("game") != b.get("game") or not a.get("team") or not b.get("team"):
+        return "cross_game"  # unknown context never correlates
     if a.get("team") != b.get("team"):
         return "opponent"
     positions, markets = {a["position"], b["position"]}, {a["market"], b["market"]}
@@ -257,7 +258,7 @@ def parlay_probability(cal, legs, draws=MC_DRAWS, seed=1):
         for j in range(i + 1, n):
             matrix[i, j] = matrix[j, i] = _rho(cal, legs[i], legs[j])
     thresholds = np.array([normal_ppf(leg["p"]) for leg in legs])
-    z = np.random.default_rng(seed).multivariate_normal(np.zeros(n), matrix, size=draws, method="cholesky")
+    z = np.random.default_rng(seed).multivariate_normal(np.zeros(n), matrix, size=draws, method="svd")  # svd tolerates a rough matrix
     independent = float(np.prod([leg["p"] for leg in legs]))
     off_diagonal = [matrix[i, j] for i in range(n) for j in range(i + 1, n)]
     return {"independent": round(independent, 4), "correlated": round(float(np.mean(np.all(z < thresholds, axis=1))), 4),

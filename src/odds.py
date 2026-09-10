@@ -199,6 +199,8 @@ def parse_props(event):
     legs = {}
     for book in event.get("bookmakers") or []:
         for market in book.get("markets") or []:
+            if not market.get("key"):
+                continue
             for outcome in market.get("outcomes") or []:
                 player, side = outcome.get("description"), (outcome.get("name") or "").lower()
                 if not player or side not in ("over", "under", "yes", "no"):

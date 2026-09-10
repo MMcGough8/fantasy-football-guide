@@ -16,8 +16,8 @@ LOG_FILE = os.getenv("PROPS_LOG_FILE") or os.path.join(os.path.dirname(os.path.d
 LEAGUE_ID = "props"  # the log's marker slot; props are league-independent
 STAT_FOR_MARKET = {"player_pass_yds": "pass_yd", "player_pass_tds": "pass_td", "player_rush_yds": "rush_yd", "player_receptions": "rec", "player_reception_yds": "rec_yd"}
 TD_KEYS = ("rush_td", "rec_td", "kr_td", "pr_td")
-LINE_FIELDS = ("player", "player_id", "position", "market", "side", "book", "line", "price", "p", "p_model", "p_market", "ev",
-               "consensus_line", "event_id", "home", "away")
+LINE_FIELDS = ("player", "player_id", "position", "market", "side", "book", "line", "price", "p", "p_model", "p_market", "p_book", "push",
+               "ev", "consensus_line", "event_id", "home", "away")
 PROBABILITY_BUCKETS = [[0.0, 0.45], [0.45, 0.5], [0.5, 0.55], [0.55, 0.6], [0.6, 0.65], [0.65, 0.7], [0.7, 1.01]]
 WEIGHT_GRID = [round(w / 10, 1) for w in range(11)]
 
@@ -26,21 +26,22 @@ def _now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _marker(what, season, week, count, now):
-    return {"kind": "logged", "what": what, "season": season, "week": week, "league_id": LEAGUE_ID, "count": count, "logged_at": now}
+def _marker(what, season, week, count, now, pulled_at=None):
+    return {"kind": "logged", "what": what, "season": season, "week": week, "league_id": LEAGUE_ID, "count": count, "logged_at": now, "pulled_at": pulled_at}
 
 
 def line_records(season, week, priced, now):
     return [{"kind": "line", "season": season, "week": week, "league_id": LEAGUE_ID, "pulled_at": now, **{f: p.get(f) for f in LINE_FIELDS}} for p in priced]
 
 
-def log_lines(path, season, week, priced, now=None):
-    """Append this week's priced legs once; a second pull the same week is not re-logged."""
-    if is_logged(read_records(path), "lines", season, week, LEAGUE_ID):
+def log_lines(path, season, week, priced, pulled_at=None):
+    """Append the priced legs of one pull. Every pull is logged (line movement is a signal),
+    but the same pull, identified by its `pulled_at`, is never logged twice."""
+    pulled_at = pulled_at or _now()
+    if any(r.get("kind") == "logged" and r.get("what") == "lines" and r.get("pulled_at") == pulled_at for r in read_records(path)):
         return 0
-    now = now or _now()
-    records = line_records(season, week, priced, now)
-    append_records(path, records + [_marker("lines", season, week, len(records), now)])
+    records = line_records(season, week, priced, pulled_at)
+    append_records(path, records + [_marker("lines", season, week, len(records), _now(), pulled_at)])
     return len(records)
 
 
@@ -99,10 +100,20 @@ def grade_bet(bet, stats_by_player):
         result, profit = "push", 0.0
     else:
         winners = [r for r in live if r["result"] == "win"]
-        payout = bet.get("quoted_payout") if len(winners) == len(bet["legs"]) and bet.get("quoted_payout") else math.prod(_decimal(r["price"]) for r in winners)
+        payout = _payout(bet, winners)
         result, profit = "win", stake * (payout - 1)
     return {"kind": "outcome", "bet_id": bet["id"], "season": bet.get("season"), "week": bet.get("week"), "league_id": LEAGUE_ID,
             "result": result, "profit": round(profit, 2), "stake": stake, "legs": results}
+
+
+def _payout(bet, winners):
+    """Decimal payout: the bet's own price for a single (an odds boost is the bet's price, not the
+    leg's), the quoted parlay payout when every leg stood, else re-multiplied from the leg prices."""
+    if len(bet["legs"]) == 1 and bet.get("price"):
+        return _decimal(bet["price"])
+    if len(winners) == len(bet["legs"]) and bet.get("quoted_payout"):
+        return bet["quoted_payout"]
+    return math.prod(_decimal(r["price"]) for r in winners)
 
 
 def _stats_by_week(records):
@@ -164,15 +175,21 @@ def _blend(p_model, p_market, weight):
     return 1 / (1 + math.exp(-z))
 
 
+def _market_at_line(r):
+    """The book's own de-vigged probability at the line we priced (falls back to the consensus)."""
+    return r.get("p_book") if r.get("p_book") is not None else r.get("p_market")
+
+
 def fit_market_weight(outcomes):
-    """The logit-blend weight on the market probability that minimises log loss over the
-    graded lines; None with nothing to fit on."""
-    usable = [(r, res) for r, res in outcomes if r.get("p_model") is not None and r.get("p_market") is not None]
+    """A diagnostic: the logit-blend weight between our probability and the book's, both at the
+    offered line, that minimises log loss over the graded lines. It says how much to trust the
+    book versus us; it is not the centre-space MARKET_WEIGHT itself. None with nothing to fit."""
+    usable = [(r, res) for r, res in outcomes if r.get("p_model") is not None and _market_at_line(r) is not None]
     if not usable:
         return None
     best = None
     for w in WEIGHT_GRID:
-        loss = -mean(math.log(max(_blend(r["p_model"], r["p_market"], w) if res == "win" else 1 - _blend(r["p_model"], r["p_market"], w), 1e-9)) for r, res in usable)
+        loss = -mean(math.log(max(_blend(r["p_model"], _market_at_line(r), w) if res == "win" else 1 - _blend(r["p_model"], _market_at_line(r), w), 1e-9)) for r, res in usable)
         if best is None or loss < best[0]:
             best = (loss, w)
     return best[1]

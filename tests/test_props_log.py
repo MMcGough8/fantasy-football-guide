@@ -9,19 +9,20 @@ from props_log import (
 
 def _priced(player, market, side, p, line=52.5, price=-110, player_id="1", p_model=0.6, p_market=0.5):
     return {"player": player, "player_id": player_id, "position": "WR", "market": market, "side": side, "line": line, "price": price,
-            "book": "draftkings", "p": p, "p_model": p_model, "p_market": p_market, "ev": 0.02, "consensus_line": line,
+            "book": "draftkings", "p": p, "p_model": p_model, "p_market": p_market, "p_book": p_market, "ev": 0.02, "consensus_line": line,
             "event_id": "evt1", "home": "IND", "away": "ATL"}
 
 
 def test_log_lines_is_idempotent_per_week_and_keeps_every_field(tmp_path):
     path = tmp_path / "props.jsonl"
     priced = [_priced("Michael Pittman", "player_reception_yds", "over", 0.56)]
-    assert log_lines(path, "2026", 1, priced, now="2026-09-11T12:00:00Z") == 1
-    assert log_lines(path, "2026", 1, priced) == 0  # already logged this week
+    assert log_lines(path, "2026", 1, priced, pulled_at="2026-09-11T12:00:00Z") == 1
+    assert log_lines(path, "2026", 1, priced, pulled_at="2026-09-11T12:00:00Z") == 0  # the same pull is not logged twice
+    assert log_lines(path, "2026", 1, priced, pulled_at="2026-09-13T14:00:00Z") == 1  # a Sunday refresh is a new pull
     records = read_records(path)
     line = next(r for r in records if r["kind"] == "line")
     assert line["player_id"] == "1" and line["p"] == 0.56 and line["pulled_at"] == "2026-09-11T12:00:00Z" and line["week"] == 1
-    assert [r["what"] for r in records if r["kind"] == "logged"] == ["lines"]
+    assert [r["what"] for r in records if r["kind"] == "logged"] == ["lines", "lines"]
 
 
 def test_record_bet_assigns_an_id_and_round_trips(tmp_path):
@@ -53,6 +54,8 @@ def test_grade_bet_settles_singles_and_parlays_with_voids():
     assert won["result"] == "win" and won["profit"] == pytest.approx(10.0 * 100 / 110, abs=0.01) and won["bet_id"] == "b1"
     lost = grade_bet({**single, "legs": [{**single["legs"][0], "line": 70.5}]}, stats)
     assert lost["result"] == "loss" and lost["profit"] == -10.0
+    boosted = grade_bet({**single, "price": 120}, stats)  # a single pays the bet's own price (an odds boost), not the leg's
+    assert boosted["profit"] == pytest.approx(12.0)
     parlay = {"id": "b2", "stake": 10.0, "price": None, "quoted_payout": 3.6,
               "legs": [{"player_id": "1", "market": "player_reception_yds", "side": "over", "line": 52.5, "price": -110},
                        {"player_id": "2", "market": "player_receptions", "side": "over", "line": 4.5, "price": -120}]}

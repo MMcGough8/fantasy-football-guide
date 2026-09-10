@@ -6,7 +6,7 @@ from calibration import Calibration
 from conftest import load_fixture
 from odds import parse_props
 from props import (
-    MARKET_WEIGHT, ONE_WAY_HOLD, SAFE, american_to_decimal, best_price, centre, consensus, devig, edge_vs_consensus,
+    MARKET_WEIGHT, ONE_WAY_HOLD, SAFE, american_to_decimal, book_offers, centre, consensus, devig, edge_vs_consensus,
     fair_american, implied_probability, is_safe, kelly_fraction, leg_ev, leg_relation, one_way_probability, p_over,
     parlay_ev, parlay_probability, price_leg, stake,
 )
@@ -71,18 +71,18 @@ def test_p_over_for_anytime_td_blends_market_and_projected_touchdowns(cal):
     assert over == pytest.approx(1 - math.exp(-lam)) and push == 0.0
 
 
-def test_best_price_prefers_the_owners_books_and_the_highest_payout(legs):
+def test_book_offers_lists_the_owners_books_only(legs):
     leg = legs[("Michael Pittman", "player_reception_yds")]
-    assert best_price(leg, "over") == ("draftkings", 52.5, -115)  # the lower line wins for an over
-    assert best_price(leg, "under") == ("fanduel", 54.5, -106)  # for an under the higher line wins before the price
-    assert best_price(leg, "over", preferred=("betmgm",)) == ("betmgm", 52.5, -105)
-    assert best_price(leg, "yes") is None
+    assert book_offers(leg, "over") == [("draftkings", 52.5, -115), ("fanduel", 54.5, -114)]
+    assert book_offers(leg, "over", preferred=("betmgm",)) == [("betmgm", 52.5, -105)] and book_offers(leg, "yes") == []
+    assert fair_american(1.0) < -100000 and fair_american(0.0) > 100000  # clamped, never a division by zero
 
 
 def test_edge_ev_kelly_and_stake_against_hand_values():
     assert edge_vs_consensus(52.5, 54.5, "over") == 2.0 and edge_vs_consensus(54.5, 52.5, "under") == 2.0
     assert leg_ev(0.55, -110) == pytest.approx(0.55 * 0.90909 - 0.45, abs=1e-4)
     assert leg_ev(0.5, -110) < 0
+    assert leg_ev(0.45, -110, push=0.2) == pytest.approx(0.45 * 0.90909 - 0.35, abs=1e-4)  # a push returns the stake
     assert kelly_fraction(0.55, -110) == pytest.approx(0.055, abs=1e-3) and kelly_fraction(0.4, -110) == 0.0
     assert stake(0.55, -110, bankroll=1000, fraction=0.25, cap=0.05) == pytest.approx(13.75, abs=0.1)
     assert stake(0.9, 100, bankroll=1000, fraction=0.25, cap=0.05) == 50.0  # capped at 5% of the bankroll
@@ -107,7 +107,12 @@ def test_price_leg_puts_it_all_together(cal, legs):
     assert 0.3 < priced["p"] < 0.7 and priced["p_market"] == pytest.approx(0.5087, abs=1e-3) and priced["p_model"] is not None
     assert priced["ev"] == pytest.approx(leg_ev(priced["p"], priced["price"]), abs=1e-4)
     assert priced["fair"] == fair_american(priced["p"]) and priced["consensus_line"] == 52.5
+    assert priced["p_book"] is not None and abs(priced["p_book"] - 0.51) < 0.02  # the priced book's own de-vigged probability at its line
     assert price_leg(cal, leg, "over", None) is None  # nobody we project is not a bet
+    whole = {**leg, "books": {"draftkings": {"over": (5, -110), "under": (5, -110)}}}
+    counted = price_leg(cal, {**whole, "market": "player_receptions"}, "over", {"position": "WR", "stats": {"rec": 5.0}})
+    assert counted["push"] > 0.1 and counted["ev"] == pytest.approx(leg_ev(counted["p"], -110, counted["push"]), abs=5e-4)  # rounded fields
+    assert counted["fair"] == fair_american(counted["p"] / (1 - counted["push"]))  # fair odds condition on no push
 
 
 def test_leg_relation_and_parlay_probability_with_correlation(cal):
@@ -118,6 +123,7 @@ def test_leg_relation_and_parlay_probability_with_correlation(cal):
     other = {"player": "Someone Else", "position": "WR", "team": "KC", "game": "evt2", "market": "player_reception_yds", "side": "over", "p": 0.6}
     assert leg_relation(qb, wr) == "same_team_qb_wr1" and leg_relation(qb, rb) == "same_team" and leg_relation(qb, far) == "opponent"
     assert leg_relation(qb, other) == "cross_game"
+    assert leg_relation({**qb, "game": None, "team": None}, wr) == "cross_game"  # unknown context never correlates
     independent = parlay_probability(cal, [qb, other])
     assert independent["independent"] == pytest.approx(0.36) and independent["correlated"] == pytest.approx(0.36, abs=0.01)
     stacked = parlay_probability(cal, [qb, wr])
