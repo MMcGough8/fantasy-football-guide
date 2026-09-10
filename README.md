@@ -69,7 +69,7 @@ For **consensus rankings**, ESPN's published ranks are matched to the board by p
 | Web UI | Streamlit |
 | Projections | Sleeper API (projections, ADP, trending, schedule/byes) |
 | League data | Sleeper public API — leagues, rosters, drafts, weekly projections |
-| AI features | Anthropic Claude API (Haiku + Sonnet) with the web search tool |
+| AI features | Anthropic Claude API (Opus 5 by default, configurable) with the web search tool |
 | Data parsing | pdfplumber (ESPN cheat-sheet extraction) |
 | HTTP / config | `requests`, `python-dotenv` |
 | Tooling | Git/GitHub, virtual environments, `.env`-based secrets |
@@ -119,20 +119,39 @@ Opens at `http://localhost:8501`.
 
 ```
 fantasy-football-guide/
-├── .streamlit/
-│   └── config.toml         # dark theme configuration
+├── .claude/skills/          # on-demand Claude Code skills (draft simulation, headless UI checks)
+├── .streamlit/config.toml   # dark theme, minimal toolbar
 ├── src/
-│   ├── draft_app.py        # Streamlit app — UI, both modes, sidebar
-│   ├── draft_board.py      # VOR ranking engine, Sleeper data, byes
-│   ├── categories.py       # draft-insight logic (sleepers, rookies, etc.)
-│   ├── grader.py           # draft grader
-│   ├── news.py             # Claude API news + "Ask the Analyst"
-│   ├── weekly_board.py     # one week's projections, blended and league-scored
-│   ├── lineup.py           # current vs optimal lineup, swap list
-│   ├── espn_ranks.py       # consensus rankings + disagreement flags
-│   ├── espn_rankings.json  # extracted ESPN rankings data
-│   ├── extract_espn.py     # PDF → rankings extractor (regenerate as needed)
+│   ├── draft_app.py         # Streamlit entry point: UI, both modes, sidebar, cached loaders
+│   ├── draft_board.py       # Sleeper projections, three-feed blend, VOR, tiers, byes
+│   ├── fantasypros.py       # FantasyPros projections and expert consensus (season and weekly)
+│   ├── espn_projections.py  # ESPN projections, live ranks and ADP
+│   ├── scoring.py           # rescoring with a league's settings, threshold-bonus estimate
+│   ├── tiers.py             # Jenks natural-breaks tiering
+│   ├── espn_ranks.py        # consensus rankings, disagreement flags, name matching
+│   ├── espn_rankings.json   # ESPN cheat-sheet snapshot (regenerate with extract_espn.py)
+│   ├── berry_rankings.json  # hand-maintained Matthew Berry snapshot
+│   ├── extract_espn.py      # PDF -> espn_rankings.json
+│   ├── roster_slots.py      # slot allocation and flex eligibility
+│   ├── recommend.py         # pick recommendation, lookahead, survival odds, K/DEF window
+│   ├── opponents.py         # opponent-needs model (position demand by draft window)
+│   ├── pick_sync.py         # maps Sleeper picks onto the board, next-pick math
+│   ├── sleeper_league.py    # Sleeper API: users, leagues, rosters, drafts, NFL state
+│   ├── manual_draft.py      # hand-logged drafts (Yahoo, ESPN) for one or two household teams
+│   ├── draft_state.py       # persisted Mine/Taken marks and pick log
+│   ├── grader.py            # draft grader
+│   ├── categories.py        # draft-insight queries (sleepers, rookies, boom, floor)
+│   ├── news.py              # Claude news, top stories, Ask the Analyst
+│   ├── weekly_board.py      # one week's projections, blended and league-scored
+│   ├── lineup.py            # current vs optimal lineup, swap list
+│   ├── matchups.py          # nflverse schedule, Vegas lines, matchup factor
+│   ├── dvp.py               # defense vs position from nflverse weekly stats
+│   ├── projection_log.py    # projection and actuals log, accuracy report
+│   └── simulate.py          # draft simulator (bots vs the recommender)
+├── tests/                   # pytest, no network; fixtures in tests/fixtures/
+├── CLAUDE.md                # working notes for Claude Code
 ├── requirements.txt
+├── .env.example
 └── README.md
 ```
 

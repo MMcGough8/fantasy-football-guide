@@ -223,3 +223,6 @@ __marimo__/
 .sleeper_league.*.bak
 .start_sit.json
 .projection_log.jsonl
+
+# macOS
+.DS_Store
