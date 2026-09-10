@@ -196,3 +196,10 @@ def test_price_legs_skips_kicked_off_games_defenses_and_unavailable_players(cal,
     from props import parse_commence
 
     assert parse_commence("2026-09-13T17:00:00") is None and parse_commence(12345) is None and parse_commence(None) is None
+
+
+def test_parlay_probability_conditions_on_no_push_when_a_leg_carries_p_win(cal):
+    a = {"player": "A", "position": "WR", "team": "IND", "game": "e1", "market": "player_receptions", "side": "over", "p": 0.47, "p_win": 0.57}
+    b = {"player": "B", "position": "WR", "team": "KC", "game": "e2", "market": "player_reception_yds", "side": "over", "p": 0.6}
+    joint = parlay_probability(cal, [a, b])
+    assert joint["independent"] == pytest.approx(0.57 * 0.6)

@@ -202,9 +202,10 @@ def fit_market_weight(outcomes):
 def calibration_report(records):
     """Predicted vs observed hit rate by probability bucket and by market, and the preferred weight."""
     outcomes = line_outcomes(records)
+    ours = [(r, res) for r, res in outcomes if r.get("market") not in GAME_MARKETS]  # a game leg's p is the market's own, calibrated by construction
     buckets = []
     for lo, hi in PROBABILITY_BUCKETS:
-        rs = [(r, res) for r, res in outcomes if r.get("p") is not None and lo <= r["p"] < hi]
+        rs = [(r, res) for r, res in ours if r.get("p") is not None and lo <= r["p"] < hi]
         buckets.append({"p": [lo, hi], "n": len(rs), "predicted": round(mean(r["p"] for r, _ in rs), 4) if rs else None,
                         "observed": round(mean(res == "win" for _, res in rs), 4) if rs else None})
     by_market = defaultdict(list)

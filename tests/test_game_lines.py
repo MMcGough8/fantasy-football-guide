@@ -68,7 +68,8 @@ def test_cover_probabilities_use_a_continuity_corrected_normal():
     win, push, loss = cover_probabilities(0.0, 12.6, 2.5)  # margin must reach 3
     assert win == pytest.approx(1 - 0.5793, abs=0.002) and push == 0.0
     win3, push3, loss3 = cover_probabilities(0.0, 12.6, 3.0)  # a whole number can push
-    assert push3 > 0.02 and win3 < win and win3 + push3 + loss3 == pytest.approx(1.0)
+    assert push3 == pytest.approx(0.6096 - 0.5787, abs=0.002)  # Phi(3.5/12.6) - Phi(2.5/12.6)
+    assert win3 == pytest.approx(1 - 0.6096, abs=0.002) and win3 + push3 + loss3 == pytest.approx(1.0)
     assert cover_probabilities(0.0, 12.6, 0.0)[0] == pytest.approx(cover_probabilities(0.0, 12.6, 0.0)[2])
 
 
@@ -118,6 +119,8 @@ def test_game_rho_reads_team_relations_and_rejects_one_event_twice(cal):
     assert favourite_sign(spread) == 1 and favourite_sign(dog) == -1 and favourite_sign(ml) == 1
     assert game_rho(cal, spread, over) == pytest.approx(0.04) and game_rho(cal, dog, over) == pytest.approx(-0.04)
     assert game_rho(cal, spread, {**rb, "game": "e2"}) == 0.0
+    assert game_rho(cal, {**rb, "team": None}, spread) == 0.0  # a prop without a team is unknown context, not the opponent
+    assert game_rho(cal, ml, over) == pytest.approx(0.04) and game_rho(cal, {**ml, "p_market": 0.4}, over) == pytest.approx(-0.04)
     with pytest.raises(ValueError):
         game_rho(cal, spread, dog)  # both sides of one market
     with pytest.raises(ValueError):

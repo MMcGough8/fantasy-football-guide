@@ -312,9 +312,10 @@ def parlay_probability(cal, legs, draws=MC_DRAWS, seed=1):
     for i in range(n):
         for j in range(i + 1, n):
             matrix[i, j] = matrix[j, i] = _rho(cal, legs[i], legs[j])
-    thresholds = np.array([normal_ppf(leg["p"]) for leg in legs])
+    chances = [leg.get("p_win", leg["p"]) for leg in legs]  # conditioned on no push: a pushed leg drops out of a parlay
+    thresholds = np.array([normal_ppf(p) for p in chances])
     z = np.random.default_rng(seed).multivariate_normal(np.zeros(n), matrix, size=draws, method="svd")  # svd tolerates a rough matrix
-    independent = float(np.prod([leg["p"] for leg in legs]))
+    independent = float(np.prod(chances))
     off_diagonal = [matrix[i, j] for i in range(n) for j in range(i + 1, n)]
     return {"independent": round(independent, 4), "correlated": round(float(np.mean(np.all(z < thresholds, axis=1))), 4),
             "rho": round(float(np.mean(off_diagonal)), 4)}

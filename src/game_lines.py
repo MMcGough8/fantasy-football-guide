@@ -48,9 +48,9 @@ def cover_probabilities(mu, sd, need):
     a margin must exceed minus the spread, a total must exceed its line. A whole-number `need`
     can land exactly (a push); the half-unit continuity correction keeps the integers honest."""
     if float(need).is_integer():
-        above = normal_cdf((need + 0.5 - mu) / sd)
-        win = 1.0 - above
-        push = above - normal_cdf((need - 0.5 - mu) / sd)
+        at_or_below = normal_cdf((need + 0.5 - mu) / sd)
+        win = 1.0 - at_or_below
+        push = at_or_below - normal_cdf((need - 0.5 - mu) / sd)
     else:
         win, push = 1.0 - normal_cdf((need - mu) / sd), 0.0
     return win, push, max(0.0, 1.0 - win - push)
@@ -190,6 +190,8 @@ def game_rho(cal, a, b):
     if is_game_leg(a) and is_game_leg(b):
         return _game_pair_rho(cal, a, b)
     prop, game = (a, b) if is_game_leg(b) else (b, a)
+    if not prop.get("team"):
+        return 0.0  # unknown context never correlates
     if game["market"] == "total":
         relation = "same_game"
     else:

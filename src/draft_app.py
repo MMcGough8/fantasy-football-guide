@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import time
@@ -43,8 +44,8 @@ from odds import (
     parse_events, parse_game_lines, parse_props, select_week_events,
 )
 from bet_builder import (
-    BEST_SINGLES, BOOK_LABELS, MARKET_LABELS, SIDE_LABELS, best_parlays, best_singles, book_label, leg_reason, market_label,
-    nearly_safe,
+    BOOK_LABELS, LIKELY, MARKET_LABELS, SIDE_LABELS, best_parlays, best_singles, book_label, chance, leg_reason, likeliest_parlays,
+    likely_winners, market_label,
 )
 from game_lines import game_scores, is_game_leg, leg_label, price_game_legs
 from props import (
@@ -557,7 +558,10 @@ def fetch_week_props(week, markets):
     note = f"{len(result['events'])} of {len(picked)} games, {len(legs)} lines pulled {datetime.now(ET).strftime('%a %-I:%M %p ET')}"
     if result["error"]:
         note += f" · stopped: {result['error']}"
-    lines = fetch_game_lines(key, {e["id"] for e in picked})
+    if any(code in (result["error"] or "") for code in ("CREDITS", "KEY")):
+        lines = {"game_legs": [], "note": "game lines skipped after the refusal", "remaining": None}  # a doomed call
+    else:
+        lines = fetch_game_lines(key, {e["id"] for e in picked})
     note += f" · {lines['note']}"
     remaining = next((r for r in (lines["remaining"], result["remaining"], events["remaining"]) if r is not None), None)
     return {"legs": legs, "game_legs": lines["game_legs"], "note": note, "remaining": remaining}
@@ -796,6 +800,7 @@ PP_DEFAULTS = {
     "pp_week_pref": None, "pp_books_pref": list(PREFERRED_BOOKS), "pp_markets_pref": list(PROP_MARKETS), "pp_bankroll_pref": 0.0,
     "pp_safe_pref": True, "pp_legs": [], "pp_game_legs": [], "pp_fetch_note": None, "pp_lines_note": None, "pp_credits": None,
     "pp_fetch_requested": False, "pp_lines_requested": False, "pp_logged": set(), "pp_slip_pref": [], "pp_built_pref": False,
+    "pp_slip_legs": [], "pp_slip_quote": None, "pp_slip_hash": "", "pp_record_note": None,
 }
 for _key, _default in PP_DEFAULTS.items():
     if _key not in st.session_state:
@@ -1254,7 +1259,7 @@ with st.sidebar:
         if not st.session_state.pp_legs:
             saved = load_props_pull(int(st.session_state.pp_week_pref))
             if saved:
-                st.session_state.pp_legs, st.session_state.pp_fetch_note = saved["legs"], saved["note"] + " (saved)"
+                st.session_state.pp_legs, st.session_state.pp_fetch_note = saved["legs"], saved["note"].replace(" (saved)", "") + " (saved)"
                 st.session_state.pp_game_legs = saved.get("game_legs") or []
                 st.session_state.pp_credits = saved.get("remaining")
         events, picked = week_prop_events(int(st.session_state.pp_week_pref))
@@ -2814,7 +2819,7 @@ def prop_flags(entry):
         flags.append("Q")
     if entry["edge"] >= EDGE_FLAG_POINTS.get(entry["market"], PROP_EDGE_FLAG_POINTS):
         flags.append(f"+{entry['edge']:g} vs consensus")
-    ok, reason = is_safe(entry["p"], entry["price"], entry["ev"], entry["market"], entry["ev_line"])
+    ok, reason = is_safe(chance(entry), entry["price"], entry["ev"], entry["market"], entry["ev_line"])
     if reason == "too good: check the line":
         flags.append("CHECK LINE")
     if entry.get("p_model") is not None and entry.get("p_market") is not None and abs(entry["p_model"] - entry["p_market"]) >= MODEL_MARKET_GAP:
@@ -2869,54 +2874,64 @@ def render_how_it_works():
         )
 
 
-def render_best_single(i, entry, bankroll):
+def render_best_single(i, entry, bankroll, prefix="best"):
     with st.container(border=True):
         left, right = st.columns([14, 1.4], vertical_alignment="center")
         left.markdown(f"<span class='rank-num'>{i + 1}</span> {leg_row_html(entry, bankroll)}", unsafe_allow_html=True)
         picked = entry["key"] in st.session_state.pp_slip_pref
-        right.button("On slip" if picked else "Add", key=f"pp_best_{i}", on_click=slip_add, args=(entry["key"],), disabled=picked, use_container_width=True)
+        right.button("On slip" if picked else "Add", key=f"pp_{prefix}_{i}", on_click=slip_add, args=(entry["key"],), disabled=picked, use_container_width=True)
 
 
-def render_best_parlay(i, parlay):
+def render_best_parlay(i, parlay, prefix="value"):
     with st.container(border=True):
         left, right = st.columns([14, 1.4], vertical_alignment="center")
         legs = "<br>".join(f"{badge(l['position'])} {leg_title_html(l)} · <b>{book_label(l['book'])}</b> <span class='mono'>{l['price']:+d}</span>"
-                           f" <span class='rank-num'>{l['p_win']:.0%}</span>" for l in parlay["legs"])
-        same_game = len({l["game"] for l in parlay["legs"]}) == 1
+                           f" <span class='rank-num'>{chance(l):.0%}</span>" for l in parlay["legs"])
+        same_game = len({l["game"] for l in parlay["legs"]}) < len(parlay["legs"])
+        detail = f" <span class='rank-num'>(independent {parlay['independent']:.0%}, correlation {parlay['rho']:+.2f})</span>" if parlay["rho"] else ""
         note = " Same game: the book prices the correlation too, so type its quote into the slip." if same_game else ""
         left.markdown(
             f"<div class='leg'><div><span class='rank-num'>{i + 1}</span> {legs}</div>"
-            f"<div class='leg-meta'>Wins {parlay['joint']:.0%} of the time (independent {parlay['independent']:.0%}, correlation {parlay['rho']:+.2f})"
-            f" · pays {parlay['payout']:.2f}x at the books' prices, fair {1 / parlay['joint']:.2f}x · edge {ev_html(parlay['ev'])}.{note}</div></div>",
-            unsafe_allow_html=True)
-        right.button("Load slip", key=f"pp_bestp_{i}", on_click=slip_load, args=([l["key"] for l in parlay["legs"]],), use_container_width=True)
+            f"<div class='leg-meta'>Wins {parlay['joint']:.0%} of the time{detail} · pays {parlay['payout']:.2f}x at the books' prices,"
+            f" fair {1 / max(parlay['joint'], 1e-4):.2f}x · edge {ev_html(parlay['ev'])}.{note}</div></div>", unsafe_allow_html=True)
+        right.button("Load slip", key=f"pp_{prefix}_{i}", on_click=slip_load, args=([l["key"] for l in parlay["legs"]],), use_container_width=True)
 
 
 def render_best_bets(cal, priced, bankroll):
     st.markdown("<div class='sec-head'>Best bets</div>", unsafe_allow_html=True)
-    st.caption(f"The safe rules: at least {SAFE['min_probability']:.0%} to hit, a line-shopping edge of {SAFE['min_ev_line']:.0%} or more, "
-               f"nothing shorter than {SAFE['min_price']}, no touchdown props. Singles build a bankroll; a parlay multiplies the books' hold.")
+    st.caption(f"Best value legs pass the safe rules: at least {SAFE['min_probability']:.0%} to hit, a line-shopping edge of {SAFE['min_ev_line']:.0%} or more, "
+               f"nothing shorter than {SAFE['min_price']}, no touchdown props. Likely winners are the legs most likely to hit at a fair price. "
+               "Singles build a bankroll; a parlay compounds the books' cut unless every leg has an edge.")
     st.button("Build this week's bets", type="primary", on_click=lambda: st.session_state.update(pp_built_pref=True))
     if not st.session_state.pp_built_pref:
         return
     singles = best_singles(priced)
+    likely = likely_winners(priced, exclude=singles)
+    st.markdown(f"<div class='leg-sub'>Best value: an edge over the consensus and {SAFE['min_probability']:.0%}+ to hit ({len(singles)})</div>", unsafe_allow_html=True)
     if singles:
-        st.markdown(f"<div class='leg-sub'>Singles, best edge first ({len(singles)} clear the rules)</div>", unsafe_allow_html=True)
         for i, entry in enumerate(singles):
-            render_best_single(i, entry, bankroll)
+            render_best_single(i, entry, bankroll, "best")
     else:
-        st.info("Nothing clears the safe rules on your books right now.")
-    parlays = best_parlays(cal, priced)
-    if parlays:
-        st.markdown("<div class='leg-sub'>Two-leg parlays from those legs, best edge first</div>", unsafe_allow_html=True)
-        for i, parlay in enumerate(parlays):
-            render_best_parlay(i, parlay)
-    elif len(singles) == 1:
-        st.caption("A parlay needs two legs that clear the rules; only one does this week.")
-    if len(singles) < BEST_SINGLES:
-        st.markdown("<div class='leg-sub'>Next closest, and what stops each one</div>", unsafe_allow_html=True)
-        for entry, why in nearly_safe(priced, limit=BEST_SINGLES - len(singles)):
-            st.markdown(f"{leg_row_html(entry, bankroll)}<div class='leg-meta' style='color:#fbbf24'>Fails: {why}.</div>", unsafe_allow_html=True)
+        st.caption("No leg on your books beats the consensus by 2% or more right now. Thursday lines are tight; refresh the props on game day.")
+    st.markdown(f"<div class='leg-sub'>Likely winners: {LIKELY['min_probability']:.0%}+ to hit at a fair price ({len(likely)})</div>", unsafe_allow_html=True)
+    st.caption("No edge here: the negative edge is the book's cut, which is what a favourite costs. Most likely first.")
+    if likely:
+        for i, entry in enumerate(likely):
+            render_best_single(i, entry, bankroll, "likely")
+    else:
+        st.caption(f"Nothing at {LIKELY['min_probability']:.0%}+ on your books this week.")
+    value = best_parlays(cal, priced) if len(singles) >= 2 else []
+    if value:
+        st.markdown("<div class='leg-sub'>Value parlays: every leg has an edge</div>", unsafe_allow_html=True)
+        for i, parlay in enumerate(value):
+            render_best_parlay(i, parlay, "valuep")
+    likeliest = likeliest_parlays(cal, singles + likely)
+    if likeliest:
+        st.markdown("<div class='leg-sub'>Likeliest parlays: one leg per game, two and three legs</div>", unsafe_allow_html=True)
+        st.caption("The chances multiply, and so does the books' cut: a parlay only beats its singles when the legs carry edges of their own. "
+                   "Load one into the slip to price it, then type the payout the book actually quotes.")
+        for i, parlay in enumerate(likeliest):
+            render_best_parlay(i, parlay, "likelyp")
 
 
 def render_slip_math(cal, legs, bankroll):
@@ -2937,38 +2952,50 @@ def render_slip_math(cal, legs, bankroll):
     for leg in legs:
         product *= american_to_decimal(leg["price"])
     quoted = st.number_input("Payout the book quotes (decimal)", min_value=1.01, value=round(product, 2), step=0.05,
-                             key="pp_quote_" + "|".join(l["key"] for l in legs),
+                             key=f"pp_quote_{st.session_state.pp_slip_hash}",
                              help="A same-game parlay is priced by the book with its own correlation; type what it shows. Cross-game legs multiply.")
     ev = parlay_ev(joint["correlated"], quoted)
     st.markdown(
         f"<div class='mono'>Wins {joint['correlated']:.0%} of the time <span class='rank-num'>(independent {joint['independent']:.0%}, correlation {joint['rho']:+.2f})</span>"
-        f" · fair payout {1 / joint['correlated']:.2f}x · quoted {quoted:.2f}x · edge {ev_html(ev)}</div>", unsafe_allow_html=True)
+        f" · fair payout {1 / max(joint['correlated'], 1e-4):.2f}x · quoted {quoted:.2f}x · edge {ev_html(ev)}</div>", unsafe_allow_html=True)
     if len({leg["game"] for leg in legs}) < len(legs):
         st.caption("Same-game legs: the book prices the correlation too, so the quoted payout is the number that matters.")
     return quoted
 
 
+def record_slip(week):
+    """The form's callback: runs before the next render, so the slip it clears is never shown stale."""
+    legs, quoted, slip_hash = st.session_state.pp_slip_legs, st.session_state.pp_slip_quote, st.session_state.pp_slip_hash
+    book = st.session_state.pp_bet_book
+    price = int(st.session_state.get(f"pp_bet_price_{slip_hash}") or 0)
+    bet = {"season": SEASON, "week": week, "book": BOOK_KEYS.get(book, book), "stake": float(st.session_state.pp_bet_stake),
+           "price": price if len(legs) == 1 else None, "quoted_payout": quoted if len(legs) > 1 else None,
+           "legs": [{"player_id": l["player_id"], "player": l["player"], "market": l["market"], "side": l["side"], "line": l["line"], "price": l["price"], "p": l["p"]} for l in legs]}
+    try:
+        st.session_state.pp_record_note = f"Recorded bet {record_bet(PROPS_LOG_FILE, bet)}. Place it in the book's app."
+        st.session_state.pp_slip_pref = []
+    except OSError as e:
+        st.session_state.pp_record_note = f"Couldn't write the props log: {e}"
+
+
 def render_bet_form(week, legs, quoted, books):
+    st.session_state.pp_slip_legs, st.session_state.pp_slip_quote = legs, quoted
     with st.form("pp_bet_form"):
-        book = st.selectbox("Book", options=[BOOK_LABELS[b] for b in books] or ["DraftKings"])
-        stake_amount = st.number_input("Stake ($)", min_value=0.0, value=10.0, step=5.0)
-        price = st.number_input("Price (American)", value=int(legs[0]["price"]) if len(legs) == 1 else 0, step=5,
-                                help="For a single, the price you actually got (a boost counts); a parlay uses the quoted payout")
-        if st.form_submit_button("Record this bet", disabled=not legs):
-            bet = {"season": SEASON, "week": week, "book": BOOK_KEYS.get(book, book), "stake": stake_amount,
-                   "price": price if len(legs) == 1 else None, "quoted_payout": quoted if len(legs) > 1 else None,
-                   "legs": [{"player_id": l["player_id"], "player": l["player"], "market": l["market"], "side": l["side"], "line": l["line"], "price": l["price"], "p": l["p"]} for l in legs]}
-            try:
-                st.success(f"Recorded bet {record_bet(PROPS_LOG_FILE, bet)}. Place it in the book's app; the slip is cleared.")
-                st.session_state.pp_slip_pref = []
-            except OSError as e:
-                st.error(f"Couldn't write the props log: {e}")
+        st.selectbox("Book", options=[BOOK_LABELS[b] for b in books] or ["DraftKings"], key="pp_bet_book")
+        st.number_input("Stake ($)", min_value=0.0, value=10.0, step=5.0, key="pp_bet_stake")
+        st.number_input("Price (American)", value=int(legs[0]["price"]) if len(legs) == 1 else 0, step=5, key=f"pp_bet_price_{st.session_state.pp_slip_hash}",
+                        help="For a single, the price you actually got (a boost counts); a parlay uses the quoted payout")
+        st.form_submit_button("Record this bet", disabled=not legs, on_click=record_slip, args=(week,))
 
 
 def render_slip(cal, by_key, week, books, bankroll):
     with st.container(border=True):
         st.markdown("<div class='sec-head'>Bet slip</div>", unsafe_allow_html=True)
+        if st.session_state.pp_record_note:
+            (st.success if st.session_state.pp_record_note.startswith("Recorded") else st.error)(st.session_state.pp_record_note)
+            st.session_state.pp_record_note = None
         keys = [k for k in st.session_state.pp_slip_pref if k in by_key]
+        st.session_state.pp_slip_hash = hashlib.md5("|".join(keys).encode()).hexdigest()[:8]
         if len(keys) < len(st.session_state.pp_slip_pref):
             st.caption("A leg dropped off the slip: its line changed or its game kicked off.")
             st.session_state.pp_slip_pref = keys
@@ -3036,7 +3063,7 @@ def render_browse(priced, game_priced, safe_only, bankroll):
     st.caption("Sorted by edge: the expected return per $1 from this book's line against the consensus, best first. "
                "Safe bets only (sidebar) hides coin flips, long prices and our model's disagreements.")
     main = [e for e in priced if e["market"] != TD_MARKET]
-    shop = sorted((e for e in main if e["ev_line"] >= SAFE["min_ev_line"] and (not safe_only or is_safe(e["p"], e["price"], e["ev"], e["market"], e["ev_line"])[0])),
+    shop = sorted((e for e in main if e["ev_line"] >= SAFE["min_ev_line"] and (not safe_only or is_safe(chance(e), e["price"], e["ev"], e["market"], e["ev_line"])[0])),
                   key=lambda e: -e["ev_line"])
     model = [] if safe_only else sorted((e for e in main if e["ev"] >= SAFE["min_ev"] and e["ev_line"] < SAFE["min_ev_line"]), key=lambda e: -e["ev"])
     touchdowns = sorted((e for e in priced if e["market"] == TD_MARKET and e["ev"] >= SAFE["min_ev"]), key=lambda e: -e["p"])
@@ -3056,7 +3083,7 @@ def render_browse(priced, game_priced, safe_only, bankroll):
             render_leg_rows(touchdowns[:BROWSE_ROWS // 2], bankroll, "td")
 
 
-def _offer_text(side, offer, label):
+def _offer_text(offer, label):
     line, price = offer
     return f"{label}{'' if line is None else f' {line:g}'} {price:+d}"
 
@@ -3083,11 +3110,11 @@ def render_line_shopping(legs, game_legs, players, games):
     choice = st.selectbox("Every book's line for", options=options, key="pp_player_widget")
     if choice in games:
         picked = [l for l in game_legs if f"{l['away']} at {l['home']}" == choice]
-        rows = [(market_label(l["market"]), {b: [_offer_text(s, o, l[s] if s in ("home", "away") else SIDE_LABELS[s]) for s, o in offers.items()]
+        rows = [(market_label(l["market"]), {b: [_offer_text(o, l[s] if s in ("home", "away") else SIDE_LABELS.get(s, s)) for s, o in offers.items()]
                                              for b, offers in l["books"].items()}) for l in picked]
     else:
         picked = [l for l in legs if l["player"] == choice]
-        rows = [(market_label(l["market"]), {b: [_offer_text(s, o, SIDE_LABELS[s]) for s, o in offers.items()] for b, offers in l["books"].items()}) for l in picked]
+        rows = [(market_label(l["market"]), {b: [_offer_text(o, SIDE_LABELS.get(s, s)) for s, o in offers.items()] for b, offers in l["books"].items()}) for l in picked]
     if picked:
         st.markdown(lines_table_html(rows, [b for b in _books_in(picked) if any(b in l["books"] for l in picked)]), unsafe_allow_html=True)
 
@@ -3165,7 +3192,7 @@ def price_this_week(cal, week, legs, game_legs, books):
 
 
 def log_this_pull(week, entries):
-    pull_id = st.session_state.pp_fetch_note
+    pull_id = " / ".join(n for n in (st.session_state.pp_fetch_note, st.session_state.pp_lines_note) if n)
     if pull_id and (SEASON, week, pull_id) not in st.session_state.pp_logged:
         try:
             log_lines(PROPS_LOG_FILE, SEASON, week, entries, pulled_at=pull_id)

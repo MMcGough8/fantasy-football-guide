@@ -149,7 +149,9 @@ GAME_MARGIN_MARKETS = ("spread", "moneyline")  # both settle on the team's margi
 
 
 def _corr(samples):
-    return round(float(np.corrcoef(*zip(*samples))[0, 1]), 4)
+    with np.errstate(invalid="ignore"):
+        r = float(np.corrcoef(*zip(*samples))[0, 1])
+    return 0.0 if np.isnan(r) else round(r, 4)
 
 
 def fit_games(games):

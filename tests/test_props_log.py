@@ -96,3 +96,16 @@ def test_calibration_report_buckets_lines_by_probability_and_fits_the_market_wei
     assert report["by_market"]["player_reception_yds"]["n"] == 200
     assert report["weight"] < 0.5  # here the model probability was the informative one
     assert fit_market_weight([]) is None
+
+
+def test_calibration_buckets_hold_our_props_only_while_by_market_keeps_the_game_lines(tmp_path):
+    path = tmp_path / "props.jsonl"
+    priced = [_priced(f"P{i}", "player_reception_yds", "over", 0.6, player_id=str(i)) for i in range(40)]
+    priced += [{**_priced("IND", "spread", "home", 0.6, line=-3.0, player_id="game:ATL@IND"), "position": "TEAM", "p_model": None} for _ in range(40)]
+    stats = {str(i): {"rec_yd": 70 if i % 2 else 40, "gp": 1} for i in range(40)}
+    stats["game:ATL@IND"] = {"home_score": 24.0, "away_score": 20.0, "gp": 1}
+    log_lines(path, "2026", 1, priced)
+    log_stats(path, "2026", 1, stats)
+    report = calibration_report(read_records(path))
+    assert sum(b["n"] for b in report["buckets"]) == 40  # the market's own numbers are calibrated by construction
+    assert report["by_market"]["spread"]["n"] == 40 and report["by_market"]["spread"]["observed"] == 1.0

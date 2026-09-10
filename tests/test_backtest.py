@@ -194,3 +194,15 @@ def test_build_calibration_carries_the_game_fit_into_the_correlation_table():
     assert correlation(cal, "spread", "total", "same_game") == data["games"]["favourite_over_rho"]
     assert correlation(cal, "moneyline", "total", "same_game") == data["games"]["favourite_over_rho"]
     assert Calibration({}).games() == {}
+
+
+def test_fit_games_reads_the_favourite_over_sign_and_a_flat_series_is_zero_not_nan():
+    games = []
+    for w in range(80):
+        # the favourite covers by k and the game goes over by k: perfectly correlated, whichever side is favoured
+        k, spread = (w % 7) - 3, 3.0 if w % 2 else -3.0
+        home_margin = spread + (k if spread > 0 else -k)
+        games.append(_game(w, f"H{w}", f"A{w}", spread, 44.0, (44 + k + home_margin) / 2, (44 + k - home_margin) / 2))
+    assert fit_games(games)["favourite_over_rho"] == pytest.approx(1.0)
+    flat = [_game(w, f"H{w}", f"A{w}", -3.0, 44.0, 24.0, 21.0) for w in range(80)]
+    assert fit_games(flat)["favourite_over_rho"] == 0.0

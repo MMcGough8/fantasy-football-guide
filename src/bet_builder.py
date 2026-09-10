@@ -3,6 +3,7 @@ singles under the safe rules, the best two-leg parlays among them, and the label
 Pure; the app renders what comes back.
 """
 from itertools import combinations
+from math import prod
 
 from odds_math import american_to_decimal
 from props import SAFE, TD_MARKET, is_safe, parlay_ev, parlay_probability
@@ -17,6 +18,9 @@ UNITS = {"player_pass_yds": "yards", "player_rush_yds": "yards", "player_recepti
 BEST_SINGLES = 5
 BEST_PARLAYS = 3
 PARLAY_POOL = 12  # the safe legs a parlay may draw from, best first
+# "Likely winners": no edge required, only a fair price (the books' cut and no more) and a real chance to hit
+LIKELY = {"min_probability": 0.60, "min_ev_line": -0.05, "min_price": -250}  # a -230 favourite carries about a 4% cut
+PARLAY_SIZES = (2, 3)
 
 
 def market_label(market):
@@ -63,8 +67,13 @@ def leg_reason(entry):
     return f"{book} pays {price:+d} on the {side} {line:g} where fair is {fair:+d}; it lands {p:.0%} of the time."
 
 
+def chance(entry):
+    """The probability the page shows and the gates judge: conditioned on no push."""
+    return entry.get("p_win", entry["p"])
+
+
 def _safe(entry, rules):
-    return is_safe(entry["p"], entry["price"], entry["ev"], entry["market"], entry["ev_line"], rules)
+    return is_safe(chance(entry), entry["price"], entry["ev"], entry["market"], entry["ev_line"], rules)
 
 
 def best_singles(priced, rules=SAFE, limit=BEST_SINGLES):
@@ -73,15 +82,19 @@ def best_singles(priced, rules=SAFE, limit=BEST_SINGLES):
     return sorted(safe, key=lambda e: -e["ev_line"])[:limit]
 
 
-NEVER_SAFE = ("anytime TD is never safe", f"price shorter than {SAFE['min_price']}")  # no line move fixes these
+def likely_winners(priced, rules=LIKELY, limit=BEST_SINGLES, exclude=()):
+    """The legs most likely to hit at a fair price, most likely first: the owner pays the books'
+    cut (the edge shown) and no more. Mostly moneyline favourites. Touchdown props never."""
+    skip = {id(e) for e in exclude}
+    picks = [e for e in priced if id(e) not in skip and e["market"] != TD_MARKET and chance(e) >= rules["min_probability"]
+             and e["ev_line"] >= rules["min_ev_line"] and e["price"] >= rules["min_price"]]
+    return sorted(picks, key=lambda e: (-chance(e), -e["ev_line"]))[:limit]
 
 
-def nearly_safe(priced, rules=SAFE, limit=BEST_SINGLES):
-    """[(leg, why it fails)] for the legs closest to passing: those a better line or a touch more
-    probability would admit, best edge first. Touchdowns and heavy favourites never qualify."""
-    failing = [(e, _safe(e, rules)[1]) for e in priced if not _safe(e, rules)[0]]
-    candidates = [pair for pair in failing if pair[1] not in NEVER_SAFE]
-    return sorted(candidates, key=lambda pair: -pair[0]["ev_line"])[:limit]
+def _parlay(legs, joint, independent, rho):
+    payout = prod(american_to_decimal(l["price"]) for l in legs)
+    return {"legs": list(legs), "joint": round(joint, 4), "independent": round(independent, 4), "rho": rho,
+            "payout": round(payout, 2), "ev": round(parlay_ev(joint, payout), 4)}
 
 
 def best_parlays(cal, priced, rules=SAFE, limit=BEST_PARLAYS, pool=PARLAY_POOL):
@@ -95,7 +108,18 @@ def best_parlays(cal, priced, rules=SAFE, limit=BEST_PARLAYS, pool=PARLAY_POOL):
             joint = parlay_probability(cal, [a, b])
         except ValueError:
             continue
-        payout = american_to_decimal(a["price"]) * american_to_decimal(b["price"])
-        parlays.append({"legs": [a, b], "joint": joint["correlated"], "independent": joint["independent"], "rho": joint["rho"],
-                        "payout": round(payout, 2), "ev": round(parlay_ev(joint["correlated"], payout), 4)})
+        parlays.append(_parlay([a, b], joint["correlated"], joint["independent"], joint["rho"]))
     return sorted(parlays, key=lambda p: -p["ev"])[:limit]
+
+
+def likeliest_parlays(cal, legs, sizes=PARLAY_SIZES, limit=BEST_PARLAYS):
+    """The parlays most likely to hit, one leg per game so the legs are independent and the
+    book's payout is the product of the prices; the best `limit` of each size. The edge is
+    honest: fairly priced legs compound the books' cut, so it is negative unless the legs carry
+    edges of their own."""
+    out = []
+    for n in sizes:
+        combos = [c for c in combinations(legs, n) if len({l["game"] for l in c}) == n]
+        parlays = [_parlay(c, prod(chance(l) for l in c), prod(chance(l) for l in c), 0.0) for c in combos]
+        out += sorted(parlays, key=lambda p: -p["joint"])[:limit]
+    return out
