@@ -111,7 +111,7 @@ def test_safe_preset_is_a_line_shopping_edge_not_a_disagreement():
     assert is_safe(0.60, -250, 0.03, "player_reception_yds", ev_line=0.03) == (False, "price shorter than -200")
     assert is_safe(0.70, -110, 0.15, "player_reception_yds", ev_line=0.03) == (False, "too good: check the line")
     assert is_safe(0.60, 120, 0.10, "player_anytime_td", ev_line=0.05) == (False, "anytime TD is never safe")
-    assert SAFE["max_legs"] == 2 and SAFE["min_ev_line"] == 0.02
+    assert SAFE["max_legs"] == 3 and SAFE["min_ev_line"] == 0.02
 
 
 def test_price_leg_puts_it_all_together(cal, legs):

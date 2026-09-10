@@ -4,7 +4,8 @@ import random
 import pytest
 
 from backtest import (
-    build_calibration, decision_curve, fit_correlations, fit_counts, fit_points, fit_ratio_tables, fit_td_factor,
+    build_calibration, decision_curve, fit_correlations, fit_counts, fit_games, fit_points, fit_ratio_tables, fit_td_factor,
+    fit_team_game_correlations,
     fit_weather, quantile_table,
 )
 from calibration import Calibration, correlation, outcome_cdf, shrink_points
@@ -136,3 +137,60 @@ def test_build_calibration_produces_a_file_the_calibration_module_reads():
     assert shrink_points(cal, "QB", 20.0) == pytest.approx(data["points"]["QB"]["a"] + data["points"]["QB"]["b"] * 20.0)
     assert 0.0 < outcome_cdf(cal, "WR", "rec_yd", 60.0, 1.0) < 1.0
     assert correlation(cal, "player_pass_yds", "player_reception_yds", "cross_game") == 0.0
+
+
+def _game(week, home, away, spread_line, total_line, home_score, away_score):
+    return {"week": week, "home": home, "away": away, "spread_line": spread_line, "total": total_line,
+            "home_score": home_score, "away_score": away_score}
+
+
+def test_fit_games_measures_the_margin_and_total_spread_around_the_market():
+    rng = random.Random(3)
+    games = []
+    for w in range(400):
+        spread, total = rng.choice([-7.0, -3.0, 0.0, 3.0, 6.5]), 45.0
+        margin = round(spread + rng.gauss(0, 13))
+        points = round(total + rng.gauss(0, 13))
+        home = (points + margin) / 2
+        games.append(_game(w, f"H{w}", f"A{w}", spread, total, home, points - home))
+    games.append(_game(999, "X", "Y", 3.0, 44.0, None, None))  # unplayed: ignored
+    fit = fit_games(games)
+    assert fit["n"] == 400
+    assert fit["margin_sd"] == pytest.approx(13.0, abs=1.5) and fit["total_sd"] == pytest.approx(13.0, abs=1.5)
+    assert abs(fit["margin_bias"]) < 2.0 and abs(fit["total_bias"]) < 2.0
+    assert abs(fit["favourite_over_rho"]) < 0.15
+    assert fit_games([])["n"] == 0 and fit_games([])["margin_sd"] is None
+
+
+def test_fit_team_game_correlations_reads_the_sign_from_the_teams_own_margin():
+    rng = random.Random(4)
+    rows = []
+    for g in range(300):
+        margin, total = rng.gauss(0, 13), rng.gauss(0, 13)
+        # the QB throws more when the game goes over; the RB runs more when his team leads
+        rows.append({**_row("QB", {"pass_yd": 250}, {"pass_yd": 250 + 2 * total + rng.gauss(0, 5)}, 18, 18, week=g, pid=f"q{g}", team="H", opp="A"),
+                     "margin_resid": margin, "total_resid": total})
+        rows.append({**_row("RB", {"rush_yd": 70}, {"rush_yd": 70 + 2 * margin + rng.gauss(0, 5)}, 12, 12, week=g, pid=f"r{g}", team="H", opp="A"),
+                     "margin_resid": margin, "total_resid": total})
+        rows.append({**_row("WR", {"rec_yd": 10}, {"rec_yd": 200}, 2, 2, week=g, pid=f"w{g}", team="H", opp="A"),
+                     "margin_resid": margin, "total_resid": total})  # under the floor: ignored
+        rows.append({**_row("TE", {"rec_yd": 60}, {"rec_yd": 60}, 8, 8, week=g, pid=f"t{g}", team="H", opp="A"),
+                     "margin_resid": None, "total_resid": None})  # no score: ignored
+    pairs = fit_team_game_correlations(rows)
+    assert pairs["player_pass_yds|total|same_game"] > 0.9
+    assert pairs["player_rush_yds|spread|same_team"] > 0.9
+    assert pairs["player_rush_yds|moneyline|same_team"] == pairs["player_rush_yds|spread|same_team"]
+    assert pairs["player_rush_yds|spread|opponent"] == -pairs["player_rush_yds|spread|same_team"]
+    assert "player_reception_yds|total|same_game" not in pairs
+
+
+def test_build_calibration_carries_the_game_fit_into_the_correlation_table():
+    rows = [{**_row("QB", {"pass_yd": 250}, {"pass_yd": 260}, 18, 18, pid=str(i)), "margin_resid": 1.0 * i, "total_resid": -1.0 * i} for i in range(60)]
+    games = [_game(w, f"H{w}", f"A{w}", -3.0, 45.0, 24 + (w % 5), 20) for w in range(60)]
+    data = build_calibration(rows, ["2025"], today="2026-09-10", games=games)
+    assert data["games"]["n"] == 60 and data["games"]["margin_sd"] > 0
+    cal = Calibration(data)
+    assert cal.games()["total_sd"] == data["games"]["total_sd"]
+    assert correlation(cal, "spread", "total", "same_game") == data["games"]["favourite_over_rho"]
+    assert correlation(cal, "moneyline", "total", "same_game") == data["games"]["favourite_over_rho"]
+    assert Calibration({}).games() == {}

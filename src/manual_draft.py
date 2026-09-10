@@ -41,12 +41,13 @@ def pick_positions(pick_log, teams, position_of):
     ]
 
 
-def draft_info(draft, pick_log, active_team, position_of):
-    """What `sync_picks_from_sleeper` would have stored, built from the pick log."""
+def draft_info(draft, pick_log, active_team, position_of, complete=False):
+    """What `sync_picks_from_sleeper` would have stored, built from the pick log. A hand-kept
+    draft never fills every pick, so the owner ends it (`complete`) rather than the log."""
     picks = len(pick_log)
     settings = draft["settings"]
     return {
-        "status": "drafting" if picks else "pre_draft",
+        "status": "complete" if complete else "drafting" if picks else "pre_draft",
         "has_order": True,
         "picks": picks,
         "next": next_pick_info(draft, picks, active_team),

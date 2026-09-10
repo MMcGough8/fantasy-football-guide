@@ -7,7 +7,6 @@ uses, which is where line shopping pays. Everything here is pure; `odds.py` fetc
 `props_log.py` records.
 """
 import math
-from datetime import datetime
 from statistics import median
 
 import numpy as np
@@ -15,6 +14,11 @@ import numpy as np
 from calibration import correlation, count_pmf, normal_ppf, outcome_cdf
 from espn_ranks import match_key
 from lineup import can_play
+from game_lines import game_rho, is_game_leg
+from odds_math import (  # re-exported: the app and the tests import them from here
+    PREFERRED_BOOKS, american_to_decimal, devig, fair_american, implied_probability, kelly_fraction, leg_ev, no_push_probability,
+    parse_commence, stake,
+)
 
 MARKET_STAT = {
     "player_pass_yds": "pass_yd", "player_pass_tds": "pass_td", "player_rush_yds": "rush_yd",
@@ -22,40 +26,17 @@ MARKET_STAT = {
 }
 COUNT_MARKETS = {"player_receptions", "player_pass_tds"}
 TD_MARKET = "player_anytime_td"
-PREFERRED_BOOKS = ("draftkings", "fanduel")
 MARKET_WEIGHT = 0.85  # the books are sharp; our projection moves the centre by the rest (the log re-tunes this)
 ONE_WAY_HOLD = 0.05  # a Yes-only anytime-TD price carries about this much hold; re-measured by the log
 COUNT_LINE_TO_MEAN = 1 / 3  # a Poisson's mean sits about a third above its median line
 # "safe" means a line-shopping edge (a book off consensus in your favour, priced with the market's own
 # centre), not our projection disagreeing with the market: the audit says those disagreements are
 # usually the market knowing something
-SAFE = {"min_probability": 0.55, "min_ev": 0.02, "min_ev_line": 0.02, "min_price": -200, "max_ev": 0.12, "max_legs": 2}
+SAFE = {"min_probability": 0.55, "min_ev": 0.02, "min_ev_line": 0.02, "min_price": -200, "max_ev": 0.12, "max_legs": 3}
 DEFENSE_SUFFIXES = ("D/ST", "Defense")
 BISECTION_STEPS = 40
 MC_DRAWS = 20000
 MAX_RHO = 0.95
-
-
-# ---- odds arithmetic ----
-
-def american_to_decimal(price):
-    return 1 + price / 100 if price > 0 else 1 + 100 / abs(price)
-
-
-def implied_probability(price):
-    return 1 / american_to_decimal(price)
-
-
-def fair_american(p):
-    """The break-even American price for a probability (clamped away from 0 and 1)."""
-    decimal = 1 / min(max(p, 1e-4), 1 - 1e-4)
-    return int(round((decimal - 1) * 100)) if decimal >= 2 else -int(round(100 / (decimal - 1)))
-
-
-def devig(over_price, under_price):
-    """The two sides' probabilities with the book's hold removed (they sum to one)."""
-    over, under = implied_probability(over_price), implied_probability(under_price)
-    return over / (over + under), under / (over + under)
 
 
 def one_way_probability(price, hold=ONE_WAY_HOLD):
@@ -163,28 +144,6 @@ def edge_vs_consensus(book_line, consensus_line, side):
     return consensus_line - book_line if side == "over" else book_line - consensus_line
 
 
-def leg_ev(p, price, push=0.0):
-    """Expected profit per dollar staked; a push returns the stake."""
-    return p * (american_to_decimal(price) - 1) - (1 - p - push)
-
-
-def no_push_probability(p, push):
-    """P(win) given the bet is not a push: what fair odds and stakes condition on."""
-    return p if push >= 1 else p / (1 - push)
-
-
-def kelly_fraction(p, price):
-    b = american_to_decimal(price) - 1
-    return max(0.0, (p * b - (1 - p)) / b)
-
-
-def stake(p, price, bankroll, fraction=0.25, cap=0.05):
-    """A quarter-Kelly stake capped at `cap` of the bankroll; None without a bankroll."""
-    if not bankroll:
-        return None
-    return round(min(cap, fraction * kelly_fraction(p, price)) * bankroll, 2)
-
-
 def is_safe(p, price, ev, market, ev_line=0.0, rules=SAFE):
     """Whether a leg fits the low-variance, positive-expectation brief; (ok, reason). The edge
     must come from the line (`ev_line`, priced with the market's own centre), not from our
@@ -219,15 +178,6 @@ def find_projection(index, leg):
     if len(rows) > 1:
         rows = [r for r in rows if r.get("team") in (leg.get("home"), leg.get("away"))] or rows
     return rows[0] if rows else None
-
-
-def parse_commence(value):
-    """The Odds API's ISO kickoff (UTC) as an aware datetime, or None for anything else."""
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00")) if value else None
-    except (ValueError, TypeError, AttributeError):
-        return None
-    return parsed if parsed is not None and parsed.tzinfo is not None else None
 
 
 def _skip(leg, projection, kickoff, now):
@@ -342,10 +292,11 @@ def leg_relation(a, b):
 
 
 def _rho(cal, a, b):
-    relation = leg_relation(a, b)
-    if relation == "same_player":
+    if a["player"] == b["player"]:
         raise ValueError(f"two legs on {a['player']} cannot share a parlay")
-    rho = correlation(cal, a["market"], b["market"], relation)
+    if is_game_leg(a) or is_game_leg(b):
+        return max(-MAX_RHO, min(MAX_RHO, game_rho(cal, a, b)))
+    rho = correlation(cal, a["market"], b["market"], leg_relation(a, b))
     if (a.get("side") == "under") != (b.get("side") == "under"):
         rho = -rho
     return max(-MAX_RHO, min(MAX_RHO, rho))

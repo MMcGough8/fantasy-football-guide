@@ -50,6 +50,10 @@ class Calibration:
         band = self.band(position, stat, projection)
         return band["k50"] if band else None
 
+    def games(self):
+        """The game-line fit (margin and total spread around the market); {} when not fitted."""
+        return self.data.get("games") or {}
+
     def count_fit(self, position, stat):
         return ((self.data.get("counts") or {}).get(position) or {}).get(stat)
 

@@ -10,6 +10,7 @@ import uuid
 from collections import defaultdict
 from statistics import mean
 
+from game_lines import GAME_MARKETS, grade_game_leg
 from projection_log import append_records, is_logged, read_records
 
 LOG_FILE = os.getenv("PROPS_LOG_FILE") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".props_log.jsonl")
@@ -69,7 +70,10 @@ def _stat_value(market, stats):
 
 
 def grade_leg(leg, stats):
-    """win | loss | push | void for one leg against the player's raw weekly stats."""
+    """win | loss | push | void for one leg against the player's raw weekly stats (a game leg
+    against the final score stored under its game id)."""
+    if leg.get("market") in GAME_MARKETS:
+        return grade_game_leg(leg, stats)
     if not stats or not stats.get("gp"):
         return "void"
     value = _stat_value(leg["market"], stats)

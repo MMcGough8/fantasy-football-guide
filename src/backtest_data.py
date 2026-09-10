@@ -135,7 +135,19 @@ def _load(folder, name, week, default):
         return json.load(f)
 
 
-def _row(p, actual_stats, actual_pts, fp, es, ctx, weather, season, week):
+def game_residuals(game, team):
+    """(team-referenced margin residual, total residual) against the closing market, or (None, None)
+    before the game is played or without lines. The margin residual is the team's own margin over its
+    spread, so a team that beat its number is positive whichever side it played."""
+    scores = (game.get("home_score"), game.get("away_score"), game.get("spread_line"), game.get("total"))
+    if any(v is None for v in scores):
+        return None, None
+    home_score, away_score, spread_line, total_line = scores
+    home_margin = home_score - away_score - spread_line
+    return (home_margin if team == game["home"] else -home_margin), home_score + away_score - total_line
+
+
+def _row(p, actual_stats, actual_pts, fp, es, ctx, weather, games_by_home, season, week):
     pl = p.get("player") or {}
     pos = pl.get("position")
     st = p.get("stats") or {}
@@ -150,6 +162,7 @@ def _row(p, actual_stats, actual_pts, fp, es, ctx, weather, season, week):
     c = ctx.get(team) or {}
     home = team if c.get("site") == "home" else c.get("opponent")
     wind, temp = weather.get((str(week), home), (None, None))
+    margin_resid, total_resid = game_residuals(games_by_home.get((week, home), {}), team)
     return {
         "season": season, "week": week, "pid": pid, "name": name, "pos": pos, "team": team, "opp": c.get("opponent"),
         "feeds": len(feeds), "proj": {s: median([f.get(s, 0) or 0 for f in feeds]) for s in STATS},
@@ -157,15 +170,27 @@ def _row(p, actual_stats, actual_pts, fp, es, ctx, weather, season, week):
         "implied": c.get("implied"), "site": c.get("site"), "roof": c.get("roof"),
         "wind": float(wind) if wind not in (None, "", "NA") else None, "temp": float(temp) if temp not in (None, "", "NA") else None,
         "game": tuple(sorted([team or "", c.get("opponent") or ""])),
+        "margin_resid": margin_resid, "total_resid": total_resid,
     }
+
+
+def _games_csv(cache_dir):
+    with open(os.path.join(cache_dir, "games.csv")) as f:
+        return list(csv.DictReader(io.StringIO(f.read())))
+
+
+def load_games(seasons, cache_dir=CACHE_DIR):
+    """The cached nflverse schedule for these seasons, parsed (scores included once played)."""
+    games_all = _games_csv(cache_dir)
+    return [g for season in seasons for g in parse_schedule(games_all, season)]
 
 
 def load_season(season, cache_dir=CACHE_DIR):
     """One row per player-week that has a projection and a game played (see `_row`)."""
     folder = os.path.join(cache_dir, season)
-    with open(os.path.join(cache_dir, "games.csv")) as f:
-        games_all = list(csv.DictReader(io.StringIO(f.read())))
+    games_all = _games_csv(cache_dir)
     games = parse_schedule(games_all, season)
+    games_by_home = {(g["week"], g["home"]): g for g in games}
     weather = {(g["week"], g["home_team"]): (g.get("wind"), g.get("temp")) for g in games_all if g["season"] == season and g["game_type"] == "REG"}
     rows = []
     for w in WEEKS:
@@ -177,5 +202,5 @@ def load_season(season, cache_dir=CACHE_DIR):
         es = _load(folder, "espn", w, {}).get("projections") or {}
         actual_pts = _load(folder, "actual", w, {})
         ctx = team_context(games, w)
-        rows += [r for r in (_row(p, stats, actual_pts, fp, es, ctx, weather, season, w) for p in proj) if r]
+        rows += [r for r in (_row(p, stats, actual_pts, fp, es, ctx, weather, games_by_home, season, w) for p in proj) if r]
     return rows

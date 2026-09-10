@@ -144,6 +144,63 @@ def _leaders(team_rows):
     return top("QB", "pass_yd"), top("WR", "rec_yd"), top("TE", "rec_yd"), top("RB", "rush_yd")
 
 
+STAT_MARKET = {"pass_yd": "player_pass_yds", "pass_td": "player_pass_tds", "rush_yd": "player_rush_yds", "rec": "player_receptions", "rec_yd": "player_reception_yds"}
+GAME_MARGIN_MARKETS = ("spread", "moneyline")  # both settle on the team's margin
+
+
+def _corr(samples):
+    return round(float(np.corrcoef(*zip(*samples))[0, 1]), 4)
+
+
+def fit_games(games):
+    """How far final scores land from the closing market: the spread of the home margin around
+    the spread line and of the points around the total (the shape game legs are priced with), the
+    mean residuals (reported, never applied: the market stays the centre) and the correlation
+    between the favourite covering and the game going over (for same-game parlays)."""
+    margins, totals, favourite = [], [], []
+    for g in games:
+        scores = (g.get("home_score"), g.get("away_score"), g.get("spread_line"), g.get("total"))
+        if any(v is None for v in scores):
+            continue
+        home_score, away_score, spread_line, total_line = scores
+        margins.append(home_score - away_score - spread_line)
+        totals.append(home_score + away_score - total_line)
+        favourite.append(margins[-1] * (1 if spread_line > 0 else -1 if spread_line < 0 else 0))
+    if len(margins) < MIN_BAND_N:
+        return {"n": len(margins), "margin_sd": None, "total_sd": None, "margin_bias": None, "total_bias": None, "favourite_over_rho": 0.0}
+    return {"n": len(margins), "margin_sd": round(float(np.std(margins)), 2), "total_sd": round(float(np.std(totals)), 2),
+            "margin_bias": round(float(np.mean(margins)), 2), "total_bias": round(float(np.mean(totals)), 2),
+            "favourite_over_rho": _corr(list(zip(favourite, totals)))}
+
+
+def fit_team_game_correlations(rows):
+    """Residual correlations between a player's stat and his own team's margin (spread and
+    moneyline legs) or the game's points (total legs), keyed the way `calibration.correlation`
+    looks them up. The opponent's margin is the negative of the team's, so those keys carry
+    the flipped sign."""
+    floors = {**PROP_FLOORS, **COUNT_FLOORS}
+    samples = defaultdict(list)
+    for r in rows:
+        if r.get("margin_resid") is None or r.get("total_resid") is None:
+            continue
+        for stat, market in STAT_MARKET.items():
+            if r["proj"].get(stat, 0) >= floors[stat]:
+                samples[(market, "margin")].append((_residual(r, stat), r["margin_resid"]))
+                samples[(market, "total")].append((_residual(r, stat), r["total_resid"]))
+    pairs = {}
+    for (market, against), v in samples.items():
+        if len(v) < MIN_BAND_N:
+            continue
+        rho = _corr(v)
+        if against == "total":
+            pairs[f"{market}|total|same_game"] = rho
+            continue
+        for game_market in GAME_MARGIN_MARKETS:
+            pairs[f"{market}|{game_market}|same_team"] = rho
+            pairs[f"{market}|{game_market}|opponent"] = -rho
+    return pairs
+
+
 def fit_correlations(rows):
     """Residual correlations for the leg pairs a parlay can hold, keyed by market pair and relation."""
     by_game = defaultdict(list)
@@ -226,7 +283,13 @@ def decision_curve(rows):
     return [{"gap": list(b), "observed": round(w / n, 4) if n else None, "n": n} for b, (n, w) in tally.items()]
 
 
-def build_calibration(rows, seasons, today):
+def build_calibration(rows, seasons, today, games=()):
+    game_fit = fit_games(games)
+    correlations = fit_correlations(rows)
+    correlations["pairs"] = {
+        **correlations["pairs"], **fit_team_game_correlations(rows),
+        **{f"{m}|total|same_game": game_fit["favourite_over_rho"] for m in GAME_MARGIN_MARKETS},
+    }
     return {
         "fitted_on": today,
         "seasons": list(seasons),
@@ -235,7 +298,8 @@ def build_calibration(rows, seasons, today):
         "ratio_tables": fit_ratio_tables(rows, PROP_FLOORS),
         "counts": fit_counts(rows, COUNT_FLOORS),
         "touchdowns": fit_td_factor(rows),
-        "correlations": fit_correlations(rows),
+        "correlations": correlations,
+        "games": game_fit,
         "weather": fit_weather(rows),
         "decision_curve": decision_curve(rows),
     }
@@ -271,7 +335,7 @@ def main(argv=None):
         rows_by_season[season] = backtest_data.load_season(season, args.cache)
     report(rows_by_season)
     rows = [r for rs in rows_by_season.values() for r in rs]
-    data = build_calibration(rows, args.seasons, backtest_data.today())
+    data = build_calibration(rows, args.seasons, backtest_data.today(), backtest_data.load_games(args.seasons, args.cache))
     with open(args.out, "w") as f:
         json.dump(data, f, indent=1)
     print(f"wrote {args.out}: {len(rows)} player-weeks over {len(args.seasons)} seasons")

@@ -17,6 +17,8 @@ ODDS_URL = "https://api.the-odds-api.com/v4/sports/americanfootball_nfl/odds"
 TIMEOUT_SECONDS = 15
 REGIONS = "us"
 MARKETS = "spreads,totals"
+GAME_LINE_MARKETS = "spreads,totals,h2h"  # the props pull adds the moneyline: 3 credits for the whole slate
+GAME_LINE_CREDITS = 3
 
 # The API names teams "City Nickname"; Sleeper uses codes.
 TEAM_NAMES = {
@@ -52,9 +54,9 @@ def _refusal(resp):
     return f"The Odds API refused the request ({code or f'HTTP {resp.status_code}'})"
 
 
-def fetch_odds(api_key):
+def fetch_odds(api_key, markets=MARKETS):
     """{"events", "remaining", "used"}: the listed games and the credit counters."""
-    params = {"apiKey": api_key, "regions": REGIONS, "markets": MARKETS, "oddsFormat": "american", "dateFormat": "iso"}
+    params = {"apiKey": api_key, "regions": REGIONS, "markets": markets, "oddsFormat": "american", "dateFormat": "iso"}
     try:
         resp = requests.get(ODDS_URL, params=params, timeout=TIMEOUT_SECONDS)
     except requests.RequestException as e:
@@ -130,6 +132,41 @@ def merge_lines(games, lines, week):
             "line_source": "live",
         })
     return merged
+
+
+GAME_MARKET_KEYS = {"spreads": "spread", "totals": "total", "h2h": "moneyline"}
+
+
+def _game_offers(market, event, name):
+    """{side: (point, price)} for one book's game market; {} unless both sides are posted."""
+    sides = {}
+    for outcome in market.get("outcomes") or []:
+        who = outcome.get("name")
+        if name == "total":
+            side = "over" if who == "Over" else "under" if who == "Under" else None
+        else:
+            side = "home" if who == event.get("home_team") else "away" if who == event.get("away_team") else None
+        point = None if name == "moneyline" else outcome.get("point")
+        if side is None or outcome.get("price") is None or (name != "moneyline" and point is None):
+            continue
+        sides[side] = (None if point is None else float(point), int(outcome["price"]))
+    return sides if len(sides) == 2 else {}
+
+
+def parse_game_lines(event):
+    """One leg per game market (spread, total, moneyline) in the props leg shape, with every
+    book's two sides; a book missing a side drops out of that market, an unknown team drops the event."""
+    home, away = TEAM_NAMES.get(event.get("home_team")), TEAM_NAMES.get(event.get("away_team"))
+    if not home or not away:
+        return []
+    books = {name: {} for name in GAME_MARKET_KEYS.values()}
+    for book in event.get("bookmakers") or []:
+        for market in book.get("markets") or []:
+            name = GAME_MARKET_KEYS.get(market.get("key"))
+            if name and (offers := _game_offers(market, event, name)):
+                books[name][book["key"]] = offers
+    return [{"event_id": event.get("id"), "home": home, "away": away, "commence": event.get("commence_time"), "market": name, "books": b}
+            for name, b in books.items() if b]
 
 
 # ---- player props (per event; each call costs markets x regions credits) ----

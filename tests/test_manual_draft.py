@@ -66,3 +66,13 @@ def test_state_with_only_a_pick_log_is_kept(tmp_path):
     path = tmp_path / "state.json"
     save_state(path, "d1", drafted=set(), mine=[], pick_log=[{"key": "a|X|RB", "team": None}])
     assert path.exists()
+
+
+def test_draft_info_reports_complete_when_the_owner_ends_the_draft():
+    from manual_draft import build_draft, draft_info
+
+    draft = build_draft(4, 2, {"Marc": 1, "Wife": 3})
+    log = [{"key": "a|A|RB", "team": "Marc"}, {"key": "b|B|WR", "team": None}]
+    ended = draft_info(draft, log, "Marc", lambda k: "RB", complete=True)
+    assert ended["status"] == "complete" and ended["picks"] == 2 and ended["manual"] is True
+    assert draft_info(draft, log, "Marc", lambda k: "RB")["status"] == "drafting"

@@ -164,3 +164,14 @@ def test_team_context_carries_the_line_source(schedule_rows):
     assert live["NE"]["line_source"] == "live" and live["SEA"]["line_source"] == "live"
     assert live["NE"]["implied"] == 22.25 and live["SEA"]["implied"] == 23.75  # 46 total, SEA favoured by 1.5
     assert live["CAR"]["line_source"] == "nflverse"
+
+
+def test_parse_schedule_keeps_final_scores_and_treats_na_as_missing():
+    rows = fetch_rows(
+        "game_id,season,game_type,week,gameday,gametime,away_team,home_team,location,spread_line,total_line,roof,surface,home_score,away_score\n"
+        "2026_01_A_B,2026,REG,1,2026-09-13,13:00,ATL,IND,Home,3,47.5,dome,grass,24,20\n"
+        "2026_02_A_B,2026,REG,2,2026-09-20,13:00,IND,ATL,Home,NA,NA,outdoors,grass,NA,\n"
+    )
+    played, unplayed = parse_schedule(rows, "2026")
+    assert played["home_score"] == 24.0 and played["away_score"] == 20.0
+    assert unplayed["home_score"] is None and unplayed["away_score"] is None and unplayed["spread_line"] is None

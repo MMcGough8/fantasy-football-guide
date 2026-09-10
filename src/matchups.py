@@ -49,13 +49,13 @@ def fetch_csv(url):
 
 
 def _number(value):
-    return float(value) if value not in (None, "") else None
+    return float(value) if value not in (None, "", "NA") else None
 
 
 def parse_schedule(rows, season):
     """Regular-season games of `season`: {week, home, away, neutral, total, spread_line,
-    roof, gameday, gametime}, with Sleeper team codes. `spread_line` is nflverse's
-    (positive = home favored)."""
+    roof, gameday, gametime, home_score, away_score}, with Sleeper team codes. `spread_line`
+    is nflverse's (positive = home favored); the scores are None until the game is played."""
     games = []
     for row in rows:
         if row.get("game_type") != "REG" or str(row.get("season")) != str(season):
@@ -70,6 +70,8 @@ def parse_schedule(rows, season):
             "roof": row.get("roof") or None,
             "gameday": row.get("gameday"),
             "gametime": row.get("gametime"),
+            "home_score": _number(row.get("home_score")),
+            "away_score": _number(row.get("away_score")),
         })
     return games
 
