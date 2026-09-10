@@ -78,6 +78,11 @@ def get_rosters(league_id):
     return _get(f"league/{league_id}/rosters") or []
 
 
+def get_trending_adds(lookback_hours=24, limit=50):
+    """Sleeper's most-added players over the window: [{"player_id", "count"}]."""
+    return _get(f"players/nfl/trending/add?lookback_hours={lookback_hours}&limit={limit}")
+
+
 def get_draft(draft_id):
     draft = _get(f"draft/{draft_id}")
     if not draft:

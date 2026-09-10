@@ -43,6 +43,7 @@ An AI analyst and player-news feature run in both modes.
 - **Kickoff locks** — players whose game has started are frozen where they are (Sleeper will not move them), swaps show the kickoff they must beat, and the page says what a missed swap would have been worth.
 - **Game-day lines** — with a free The Odds API key, the current week's spreads and totals are refreshed from the sportsbooks a few times a day (median across books), so Sunday-morning moves reach the matchup adjustment; without a key the weekly nflverse lines are used.
 - **Matchup adjustment** — each projection is scaled (capped at 12%) by the team's Vegas implied total, home/away, and the opponent's points allowed to the position, all from nflverse's free schedule and weekly stats; the chip on every row shows the line, the implied total, the DvP rank and the factor, and a sidebar toggle turns it off.
+- **Waiver targets** — free agents ranked by how much they improve your best lineup, split into season-long adds, this-week streamers and depth upgrades, with Sleeper's trending adds, your FAAB, and drop candidates. `src/waiver_report.py` prints the same for every league of one or more Sleeper users, for a scheduled Tuesday run.
 - **Projection accuracy log** — every week's projections are logged locally; one click records the real scores from Sleeper afterward, and the page reports each feed's error so weights and the matchup coefficients can be tuned from evidence.
 - **Trade Evaluator** — on the roadmap.
 

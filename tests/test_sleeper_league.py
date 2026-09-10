@@ -123,3 +123,15 @@ def test_find_my_roster_never_matches_an_orphan_roster_for_an_unknown_user():
 
     orphan = [{"roster_id": 9, "owner_id": None, "co_owners": None}]
     assert find_my_roster(orphan, None) is None
+
+
+def test_get_trending_adds_hits_the_trending_endpoint(monkeypatch):
+    seen = {}
+
+    def fake_get(path):
+        seen["path"] = path
+        return [{"player_id": "1", "count": 2}]
+
+    monkeypatch.setattr(sleeper_league, "_get", fake_get)
+    assert sleeper_league.get_trending_adds(lookback_hours=48, limit=10) == [{"player_id": "1", "count": 2}]
+    assert seen["path"] == "players/nfl/trending/add?lookback_hours=48&limit=10"

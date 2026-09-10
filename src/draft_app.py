@@ -35,7 +35,7 @@ from lineup import (
     locked_starters, mark_locked, missed_players, optimal_lineup, reachable_lineup, swap_deadline, unplayable_starters,
 )
 from matchups import (
-    ET, MatchupError, attach_matchup, fetch_schedule, fmt_kickoff, game_label, kickoff_time, locked_teams, next_kickoffs,
+    ET, MatchupError, fetch_schedule, fmt_kickoff, game_label, kickoff_time, locked_teams, next_kickoffs,
     team_context,
 )
 from dvp import allowed_per_game, blend_seasons, factors, fetch_player_weeks
@@ -43,7 +43,8 @@ from odds import OddsError, fetch_odds, merge_lines, parse_events
 from projection_log import LOG_FILE, ActualsError, accuracy_report, fetch_actual_points, is_logged, log_actuals, log_projections, read_records
 from roster_slots import IGNORED_SLOTS, starters_from_roster_positions
 from sleeper_league import find_my_roster, lineup_week
-from weekly_board import attach_weekly_ranks, build_weekly_pool, roster_rows
+from waivers import drop_candidates, faab_left, free_agents, parse_trending, waiver_settings, waiver_targets
+from weekly_board import assemble_pool, roster_rows
 from manual_draft import build_draft as build_manual_draft, draft_info as manual_draft_info
 from opponents import demand_multipliers
 from scoring import PRESET_FALLBACK_POSITIONS, scoring_summary, unprojected_bonus_keys
@@ -407,6 +408,37 @@ def load_live_odds(retry_bucket):
     return {"ok": True, "data": parsed["lines"], "remaining": result["remaining"], "missing": parsed["missing"]}
 
 
+TRENDING_CACHE_SECONDS = 3600
+
+
+@st.cache_data(ttl=TRENDING_CACHE_SECONDS, show_spinner=False)
+def load_trending(retry_bucket):
+    """Sleeper's most-added players in the last 24 hours, {player_id: adds}."""
+    try:
+        return {"ok": True, "data": parse_trending(sleeper_league.get_trending_adds())}
+    except SleeperError as e:
+        return {"ok": False, "error": str(e)}
+
+
+def load_season_board(league):
+    """The season board scored with *this* league's rules and starters (the draft-mode
+    board belongs to whichever league is connected there). Same cached loader draft
+    mode uses, so feeds are shared; returns {"ok", "board", "by_id", "note"}."""
+    cfg = sleeper_league.league_config(league, None)
+    try:
+        board, note, _ = load_board(
+            "pts_ppr",  # what draft mode passes for any connected league, so the cache is shared; only ADP reads it
+            cfg["num_teams"],
+            tuple(sorted(cfg["scoring_settings"].items())),
+            tuple(sorted(cfg["starters"].items())),
+            bool(os.getenv("FANTASYPROS_API_KEY", "").strip()),
+            0,
+        )
+    except Exception as e:  # the board build raises on a Sleeper outage; the page must not
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "board": board, "by_id": index_board_by_player_id(board), "note": note}
+
+
 def week_games(week):
     """(games, note): this week's games from the cached schedule with live lines folded in
     when The Odds API answered; games is empty and the note is the error when nflverse
@@ -452,7 +484,6 @@ def load_weekly_pool(week, scoring_items, use_fantasypros, retry_bucket):
             problems.append("ESPN missing " + ", ".join(espn["data"]["missing"]))
     else:
         problems.append(f"ESPN: {espn['error']}")
-    pool = attach_weekly_ranks(build_weekly_pool(week, scoring_settings, extra), fp_ranks)
     games, lines_note = week_games(week)  # cached loaders with their own TTLs; a feed outage must not refetch them
     context = team_context(games, week)
     if not games:
@@ -466,7 +497,7 @@ def load_weekly_pool(week, scoring_items, use_fantasypros, retry_bucket):
         problems.append(f"DvP: {dvp_result['error']}")
     elif dvp_result.get("note"):
         notes.append(dvp_result["note"])
-    pool = attach_matchup(pool, context, dvp_result["data"] if dvp_result["ok"] else {})
+    pool = assemble_pool(week, scoring_settings, extra, fp_ranks, context, dvp_result["data"] if dvp_result["ok"] else {})
     feeds = ["Sleeper"] + (["FantasyPros"] if "fp" in extra else []) + (["ESPN"] if "espn" in extra else [])
     note = f"Week {week} projections: " + " + ".join(feeds)
     if fp_ranks:
@@ -640,6 +671,8 @@ if "ss_adjust_pref" not in st.session_state:
     st.session_state.ss_adjust_pref = True
 if "ss_logged" not in st.session_state:
     st.session_state.ss_logged = set()
+if "ss_waivers_pref" not in st.session_state:
+    st.session_state.ss_waivers_pref = False
 if "pick_log" not in st.session_state:
     st.session_state.pick_log = []
 if "pos_filter" not in st.session_state:
@@ -2171,6 +2204,94 @@ def render_missed(optimal, reachable, key):
     )
 
 
+def waiver_row_html(entry, key):
+    row = entry["row"]
+    gains = f"<span class='mono' style='color:#00e0a4'>{entry['week_gain']:+.1f} this week</span>"
+    if entry["season_gain"] > 0:
+        gains += f" · <span class='mono'>{entry['season_gain']:+.0f} season</span>"
+    adds = f" <span class='chip'>{entry['adds']:,} adds/24h</span>" if entry["adds"] else ""
+    no_season = "" if entry.get("has_season", True) else " <span class='rank-num'>no season projection</span>"
+    return (
+        f"<div style='margin:3px 0'>{badge(row['position'])} <b>{row['name']}</b> <span class='rank-num'>{row.get('team') or ''}</span>"
+        f"{matchup_chip_html(row)} <span class='mono'>{row.get(key, 0):.1f}</span> · {gains}{no_season}{status_badge(row)}{adds}</div>"
+    )
+
+
+def season_label(entry):
+    """'season 153 · VOR +5' (VOR only when the board computed one), or 'no season projection'."""
+    if entry.get("season_points") is None:
+        return "no season projection"
+    text = f"season {entry['season_points']:.0f}"
+    value = entry.get("season_value")
+    if value is not None and value != entry["season_points"]:
+        text += f" · VOR {value:+.0f}"
+    return text
+
+
+def depth_row_html(entry, key):
+    row, over = entry["row"], entry["over"]
+    adds = f" <span class='chip'>{entry['adds']:,} adds/24h</span>" if entry["adds"] else ""
+    return (
+        f"<div style='margin:3px 0'>{badge(row['position'])} <b>{row['name']}</b> <span class='rank-num'>{row.get('team') or ''}</span>"
+        f"{matchup_chip_html(row)} <span class='mono'>{season_label(entry)}</span>"
+        f" <span class='rank-num'>over {over['name']}</span>{status_badge(row)}{adds}</div>"
+    )
+
+
+def render_waiver_lists(targets, drops, week, key):
+    for title, entries in (("Add for the season", targets["season"]), (f"Streamers for week {week}", targets["week"])):
+        st.markdown(f"<div class='sec-head'>{title}</div>", unsafe_allow_html=True)
+        if not entries:
+            st.caption("Nobody on the wire improves this lineup.")
+        for entry in entries:
+            st.markdown(waiver_row_html(entry, key), unsafe_allow_html=True)
+    st.markdown("<div class='sec-head'>Depth upgrades</div>", unsafe_allow_html=True)
+    if not targets["depth"]:
+        st.caption("Nobody on the wire is worth more over the season than your least valuable bench player.")
+    for entry in targets["depth"]:
+        st.markdown(depth_row_html(entry, key), unsafe_allow_html=True)
+    st.markdown("<div class='sec-head'>Drop candidates</div>", unsafe_allow_html=True)
+    if not drops:
+        st.caption("Everyone on the roster starts somewhere.")
+    for drop in drops:
+        row = drop["row"]
+        st.markdown(f"<div style='margin:3px 0'>{badge(row['position'])} {row['name']} <span class='rank-num'>{row.get('team') or ''} · {season_label(drop)}</span>{status_badge(row)}</div>", unsafe_allow_html=True)
+
+
+def render_waivers(league, rosters, my_team, rows, current, locked, pool, starters, key, week):
+    """Free agents who improve this week's or the season lineup, and my expendable players."""
+    settings = waiver_settings(league)
+    line = f"Waivers: {settings['type']}"
+    if settings["budget"] is not None:
+        line += f" · ${faab_left(my_team, settings['budget'])} of {settings['budget']} left"
+    if settings["clear_days"]:
+        line += f" · claims clear after {settings['clear_days']} day(s)"
+    st.markdown(f"<span class='rank-num'>{line}</span>", unsafe_allow_html=True)
+    st.toggle(
+        "Compute waiver targets",
+        value=st.session_state.ss_waivers_pref,
+        key="ss_waivers_widget",
+        on_change=lambda: st.session_state.update(ss_waivers_pref=bool(st.session_state.ss_waivers_widget)),
+        help="Builds the season board for this league's scoring (about 15 seconds the first time, then cached)",
+    )
+    if not st.session_state.ss_waivers_pref:
+        return
+    season = load_season_board(league)
+    if not season["ok"]:
+        st.error(f"Season values unavailable: {season['error']}")
+        return
+    trending = load_trending(0)
+    if not trending["ok"]:
+        st.caption(f"Trending adds unavailable ({trending['error']}); retried within the hour.")
+    my_season_rows = [season["by_id"][r["player_id"]] for r in rows if r["player_id"] in season["by_id"]]
+    free = mark_locked(free_agents(pool, rosters), locked)  # a free agent whose game started cannot start this week
+    targets = waiver_targets(free, rows, my_season_rows, season["by_id"], starters, key,
+                             trending["data"] if trending["ok"] else {}, current=current)
+    drops = drop_candidates(rows, my_season_rows, starters, key=key, current=current)
+    render_waiver_lists(targets, drops, week, key)
+    st.caption(f"Season values: {season['note']}. Gains are the improvement to the best lineup with the player added, assuming a free roster spot (an add costs a drop).")
+
+
 LOCK_WATCH_SECONDS = 60
 
 
@@ -2334,6 +2455,9 @@ if mode == "Start/Sit":
             by_source = " · ".join(f"{SOURCE_LABELS.get(s, s)} {v}" for s, v in (row.get("points_by_source") or {}).items()) or "no feed"
             fp = f" · FP {row['fp_week_pos_rank']} (rank {row['fp_week_rank']}, spread ±{row['fp_week_rank_std']:.0f})" if row.get("fp_week_pos_rank") else ""
             st.markdown(f"<div class='mono' style='font-size:0.82rem'>{row['name']}: {by_source}{fp}</div>", unsafe_allow_html=True)
+
+    with st.expander("Waiver targets", expanded=False):
+        render_waivers(ctx["league"], ctx["rosters"], my_team, rows, current, locked_now, pool, ss_starters, ss_key, ss_week)
 
     with st.expander("Matchups and accuracy", expanded=False):
         with_lines = sorted((c for c in week_context.items() if c[1].get("implied") is not None), key=lambda kv: -kv[1]["implied"])

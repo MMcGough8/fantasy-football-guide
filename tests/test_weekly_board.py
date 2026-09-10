@@ -83,3 +83,23 @@ def test_roster_rows_drop_duplicate_ids():
 def test_roster_rows_fallback_carries_the_matchup_fields():
     rows = roster_rows(["9999"], {}, {}, {}, 3)
     assert rows[0]["adjusted_points"] == 0.0 and rows[0]["matchup"] is None
+
+
+def test_assemble_pool_is_the_rank_and_matchup_chain_over_the_weekly_pool(monkeypatch):
+    import weekly_board
+    from matchups import attach_matchup
+
+    pool = {"1": {"player_id": "1", "name": "Some Back", "position": "RB", "team": "KC", "points": 10.0}}
+    seen = {}
+
+    def fake_build(week, scoring, extra):
+        seen.update(week=week, scoring=scoring, extra=extra)
+        return pool
+
+    monkeypatch.setattr(weekly_board, "build_weekly_pool", fake_build)
+    context = {"KC": {"opponent": "DEN", "site": "home", "implied": 27.0, "total": 48.0, "spread": -6.0, "roof": None,
+                      "gameday": None, "gametime": None}}
+    assembled = weekly_board.assemble_pool(1, {"rec": 1}, {"fp": {}}, None, context, {})
+    assert seen == {"week": 1, "scoring": {"rec": 1}, "extra": {"fp": {}}}
+    assert assembled == attach_matchup(attach_weekly_ranks(pool, None), context, {})
+    assert assembled["1"]["matchup"]["opponent"] == "DEN" and "adjusted_points" in assembled["1"]

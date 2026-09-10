@@ -7,6 +7,7 @@ Sleeper rosters list (defenses are team codes like "HOU").
 """
 from draft_board import POSITIONS, fetch_position
 from espn_ranks import match_key
+from matchups import attach_matchup
 
 # weekly row field -> FantasyPros weekly rank entry field
 RANK_FIELDS = {
@@ -45,6 +46,13 @@ def attach_weekly_ranks(pool, fp_ranks):
         entry = (fp_ranks or {}).get(match_key(row["name"], row["position"])) or {}
         ranked[player_id] = {**row, **{field: entry.get(source) for field, source in RANK_FIELDS.items()}}
     return ranked
+
+
+def assemble_pool(week, scoring_settings, extra, fp_ranks, context, dvp):
+    """The full weekly pool: blended and league-scored, with FantasyPros weekly ranks
+    and matchup context attached. The app's loader and the waiver report both use this
+    so the two never drift."""
+    return attach_matchup(attach_weekly_ranks(build_weekly_pool(week, scoring_settings, extra), fp_ranks), context, dvp)
 
 
 def roster_rows(player_ids, pool, season_index, byes, week):
