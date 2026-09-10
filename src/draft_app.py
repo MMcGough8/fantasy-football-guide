@@ -1071,8 +1071,11 @@ with st.sidebar:
                     args=(name,),
                 )
 
-    # ---- Mode toggle (top); hidden while a draft is live so it cannot be bumped ----
-    draft_live = (st.session_state.draft_info or {}).get("status") == "drafting"
+    # ---- Mode toggle (top); hidden while a synced Sleeper draft is live so it cannot be bumped.
+    # A manual (Yahoo/ESPN) draft is "drafting" until every pick is logged, which can be forever,
+    # so it never hides the other modes.
+    _info = st.session_state.draft_info or {}
+    draft_live = _info.get("status") == "drafting" and not _info.get("manual")
     if draft_live:
         mode = "Draft"
     else:
