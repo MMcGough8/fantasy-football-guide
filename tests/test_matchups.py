@@ -175,3 +175,14 @@ def test_parse_schedule_keeps_final_scores_and_treats_na_as_missing():
     played, unplayed = parse_schedule(rows, "2026")
     assert played["home_score"] == 24.0 and played["away_score"] == 20.0
     assert unplayed["home_score"] is None and unplayed["away_score"] is None and unplayed["spread_line"] is None
+
+
+def test_parse_schedule_reads_moneylines_and_treats_na_as_missing():
+    rows = fetch_rows(
+        "game_id,season,game_type,week,gameday,gametime,away_team,home_team,location,spread_line,total_line,roof,surface,home_moneyline,away_moneyline\n"
+        "2026_01_A_B,2026,REG,1,2026-09-13,13:00,ATL,IND,Home,3,47.5,dome,grass,-150,130\n"
+        "2026_02_A_B,2026,REG,2,2026-09-20,13:00,IND,ATL,Home,NA,NA,outdoors,grass,NA,\n"
+    )
+    priced, unpriced = parse_schedule(rows, "2026")
+    assert priced["home_moneyline"] == -150.0 and priced["away_moneyline"] == 130.0
+    assert unpriced["home_moneyline"] is None and unpriced["away_moneyline"] is None

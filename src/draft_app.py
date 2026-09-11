@@ -1,4 +1,5 @@
 import hashlib
+import html
 import json
 import os
 import time
@@ -36,7 +37,7 @@ from lineup import (
     lock_status, locked_starters, mark_locked, missed_players, optimal_lineup, reachable_lineup, swap_deadline,
     unplayable_starters,
 )
-from matchups import ET, MatchupError, fetch_schedule, fmt_kickoff, locked_teams, team_context
+from matchups import ET, MatchupError, fetch_schedule, fmt_kickoff, kickoff_time, locked_teams, team_context
 from calibration import CALIBRATION_FILE, Calibration, calibrate_rows, error_sd, swap_confidence
 from dvp import allowed_per_game, blend_seasons, factors, fetch_player_weeks
 from odds import (
@@ -53,6 +54,11 @@ from props import (
     stake,
 )
 from props_log import LOG_FILE as PROPS_LOG_FILE
+from survivor import (
+    SURVIVOR_FILE, add_pool, grade_picks, load_pools, pool_status, record_pick, remove_pick, remove_pool, rename_pool, save_pools,
+    used_teams,
+)
+from survivor_plan import DEFAULT_MARGIN_SD, live_win_probabilities, priced_weeks, rank_candidates
 from props_log import bet_summary, calibration_report, grade_bets, log_lines, log_stats, record_bet
 from projection_log import (
     LOG_FILE, ActualsError, accuracy_report, decision_curve, fetch_actual_points, is_logged, log_actuals, log_projections,
@@ -826,6 +832,55 @@ if st.session_state.pp_lines_requested:
         st.session_state.pp_credits = refreshed["remaining"]
         save_props_pull(int(st.session_state.pp_week_pref or 1), {"legs": st.session_state.pp_legs, "game_legs": refreshed["game_legs"],
                                                                      "note": st.session_state.pp_fetch_note or "", "remaining": refreshed["remaining"]})
+# Knockout mode: its own keys; the pools load once from the file and every change saves at once
+KO_DEFAULTS = {"ko_week_pref": None, "ko_pools": None, "ko_note": None}
+for _key, _default in KO_DEFAULTS.items():
+    if _key not in st.session_state:
+        st.session_state[_key] = _default
+if st.session_state.ko_pools is None:
+    st.session_state.ko_pools = load_pools(SURVIVOR_FILE, SEASON)
+
+
+def ko_apply(change, *args):
+    """Run a pure pools change, save it, keep the session in step; a refusal becomes a sidebar note."""
+    try:
+        pools = change(st.session_state.ko_pools, *args)
+        save_pools(SURVIVOR_FILE, SEASON, pools)
+        st.session_state.ko_pools, st.session_state.ko_note = pools, None
+    except (ValueError, OSError, KeyError) as e:
+        st.session_state.ko_note = str(e)
+
+
+def ko_record(name, week, team):
+    ko_apply(record_pick, name, week, team)
+
+
+def ko_record_other(name, week, i):
+    team = st.session_state.get(f"ko_other_{i}")
+    if team:
+        ko_apply(record_pick, name, week, team)
+
+
+def ko_remove(name, week):
+    ko_apply(remove_pick, name, week)
+
+
+def ko_rename(old, i):
+    ko_apply(rename_pool, old, st.session_state.get(f"ko_rename_{i}", old))
+    if st.session_state.ko_note:
+        st.session_state[f"ko_rename_{i}"] = old  # a refused rename must not leave the box lying
+
+
+def ko_remove_pool(name):
+    ko_apply(remove_pool, name)
+
+
+def ko_add():
+    ko_apply(add_pool, st.session_state.get("ko_add_widget", ""))
+    if st.session_state.ko_note is None:
+        st.session_state.ko_add_widget = ""
+
+
 if "pick_log" not in st.session_state:
     st.session_state.pick_log = []
 if "pos_filter" not in st.session_state:
@@ -891,9 +946,9 @@ mode = st.session_state.app_mode or "Draft"
 # One mode renders per run: st.tabs would run all three, and each mode loads its own feeds (and,
 # for Props, spends credits on a click), so this is a control, not tabs.
 if draft_live:
-    st.caption("Draft is live: Start/Sit and Props unlock when it ends.")
+    st.caption("Draft is live: Start/Sit, Props and Knockout unlock when it ends.")
 else:
-    st.segmented_control("Mode", ["Draft", "Start/Sit", "Props"], key="app_mode", label_visibility="collapsed")
+    st.segmented_control("Mode", ["Draft", "Start/Sit", "Props", "Knockout"], key="app_mode", label_visibility="collapsed")
 st.markdown("<div class='cc-title'>🏈 Fantasy <span class='accent'>Command Center</span></div>", unsafe_allow_html=True)
 
 # While a feed is missing the cache key rolls every DEGRADED_RETRY_SECONDS so it retries
@@ -901,8 +956,8 @@ retry_bucket = (
     int(time.time() // DEGRADED_RETRY_SECONDS) if st.session_state.get("board_degraded") else 0
 )
 try:
-    # Props prices off the weekly pool, so the season board (the slowest load) is skipped there
-    if mode == "Props":
+    # Props prices off the weekly pool and Knockout needs no players, so the season board (the slowest load) is skipped there
+    if mode in ("Props", "Knockout"):
         board, projection_note, degraded = [], "", False
     else:
         with st.spinner("Building the season board from Sleeper, FantasyPros and ESPN (about 20 seconds the first time)"):
@@ -1274,6 +1329,25 @@ with st.sidebar:
             st.caption(events["error"])
         st.divider()
 
+    if mode == "Knockout":
+        st.markdown("<div class='sec-head'>Knockout</div>", unsafe_allow_html=True)
+        if st.session_state.ko_week_pref is None:
+            state = load_nfl_state(0)
+            st.session_state.ko_week_pref = lineup_week(state["data"]) if state["ok"] else 1
+        st.number_input("Week", min_value=1, max_value=18, value=int(st.session_state.ko_week_pref), key="ko_week_widget",
+                        on_change=lambda: st.session_state.update(ko_week_pref=int(st.session_state.ko_week_widget)))
+        for i, name in enumerate(list(st.session_state.ko_pools)):
+            box, drop = st.columns([4, 1.3], vertical_alignment="bottom")
+            box.text_input(f"Pool {i + 1}", value=name, key=f"ko_rename_{i}", on_change=ko_rename, args=(name, i))
+            drop.button("Drop", key=f"ko_drop_{i}", on_click=ko_remove_pool, args=(name,), help="Deletes the pool and its picks", use_container_width=True)
+        st.text_input("New pool", key="ko_add_widget", placeholder="Pool name")
+        st.button("Add pool", on_click=ko_add, use_container_width=True)
+        st.button("Refresh schedule and scores", on_click=load_schedule.clear, use_container_width=True,
+                  help="nflverse posts scores and new lines overnight; this refetches the schedule (no credits)")
+        if st.session_state.ko_note:
+            st.warning(st.session_state.ko_note)
+        st.divider()
+
     # ---- Sleeper League ----
     st.markdown(
         f"<div class='sec-head'>{(league or {}).get('platform', 'Sleeper')} League</div>",
@@ -1569,7 +1643,9 @@ with st.sidebar:
 # ==================== HEADER ====================
 if mode == "Props":
     subtitle = f"Props · Week {st.session_state.pp_week_pref} · " + (st.session_state.pp_fetch_note or "fetch this week's props from the sidebar")
-elif mode != "Draft":
+elif mode == "Knockout":
+    subtitle = f"Knockout · Week {st.session_state.ko_week_pref} · {len(st.session_state.ko_pools)} pools"
+elif mode == "Start/Sit":
     ss_pick = st.session_state.ss_league_options.get(st.session_state.ss_league_pref)
     subtitle = f"Start/Sit · Week {st.session_state.ss_week_pref} · " + (ss_pick["name"] if ss_pick else "pick a league in the sidebar")
 elif league:
@@ -3231,5 +3307,141 @@ def render_props_mode():
         render_props_calibration(records)
 
 
+# ---- Knockout mode: one pick a week per pool, never the same team twice ----
+
+def knockout_live_legs(week):
+    """This week's moneyline legs from the props pull, read-only (never a credit): the session's when
+    it is for this week, else the saved pull for this week, else nothing."""
+    if st.session_state.pp_week_pref == week and st.session_state.pp_game_legs:
+        return st.session_state.pp_game_legs
+    return (load_props_pull(week) or {}).get("game_legs") or []
+
+
+def knockout_inputs(week):
+    """(games, priced weeks, live pairs, this week's context, locked teams, schedule note)."""
+    games, note = week_games(week)
+    if not games:
+        st.error(f"Couldn't load the schedule: {note}")
+        st.stop()
+    cal = load_calibration(calibration_signature())
+    sd = cal.games().get("margin_sd") or DEFAULT_MARGIN_SD
+    live = live_win_probabilities(knockout_live_legs(week))
+    weeks = priced_weeks(games, week, sd, {week: live})
+    ctx = team_context(games, week)
+    now = datetime.now(ET)
+    played = {t for g in games if g["week"] == week and g.get("home_score") is not None for t in (g["home"], g["away"])}
+    return games, weeks, live, ctx, set(locked_teams(ctx, now)) | played, note
+
+
+def ko_matchup_html(team, ctx):
+    where = ctx.get(team) or {}
+    when = kickoff_time(where)
+    kick = f" <span class='rank-num'>{fmt_kickoff(when)}</span>" if when else ""
+    return f"{'at' if where.get('site') == 'away' else 'vs'} {where.get('opponent', '?')}{kick}"
+
+
+def render_ko_recommendation(i, name, ranked, week, ctx):
+    if not ranked:
+        st.caption("No pickable team this week: every game has kicked off, or no lines are posted yet.")
+        return
+    top = ranked[0]
+    plan = " · ".join(f"wk{w} {t} {top['plan_p'][w]:.0%}" for w, t in sorted(top["plan"].items()))
+    st.markdown(f"<div class='leg'><div>Pick <b>{top['team']}</b> <span class='mono'>{top['p_win']:.0%}</span> {ko_matchup_html(top['team'], ctx)}"
+                f" · survives the posted weeks <span class='mono'>{top['horizon']:.0%}</span></div>"
+                f"<div class='leg-meta'>{top['reason']}{' Plan after: ' + plan if plan else ''}</div></div>", unsafe_allow_html=True)
+    for row in ranked[:5]:
+        left, right = st.columns([14, 1.6], vertical_alignment="center")
+        left.markdown(f"<div class='leg'><div><span class='rank-num'>{row['rank'] + 1}</span> <b>{row['team']}</b> <span class='mono'>{row['p_win']:.0%}</span>"
+                      f" {ko_matchup_html(row['team'], ctx)} · horizon <span class='mono'>{row['horizon']:.0%}</span></div>"
+                      f"<div class='leg-meta'>{row['reason']}</div></div>", unsafe_allow_html=True)
+        right.button(f"Pick {row['team']}", key=f"ko_pick_{i}_{row['team']}", on_click=ko_record, args=(name, week, row["team"]), use_container_width=True)
+
+
+def render_ko_current(i, name, week, pick, entry, ctx, locked, row):
+    result = (entry or {}).get("result", "pending")
+    colour = {"won": "#00e0a4", "lost": "#f87171"}.get(result, "#e6edf3")
+    score = f" {entry['score']}" if entry and entry.get("score") else ""
+    plan = " · ".join(f"wk{w} {t} {row['plan_p'][w]:.0%}" for w, t in sorted(row["plan"].items())) if row else ""
+    st.markdown(f"<div class='leg'><div>This week: <b>{pick}</b> {ko_matchup_html(pick, ctx)} · <b style='color:{colour}'>{result}{score}</b></div>"
+                f"<div class='leg-meta'>Entered on CBS. Remove it here only if you changed it there before kickoff.{' Plan after: ' + plan if plan else ''}</div></div>",
+                unsafe_allow_html=True)
+    if pick not in locked:
+        st.button("Remove this pick", key=f"ko_rm_{i}", on_click=ko_remove, args=(name, week))
+
+
+def render_ko_other(i, name, week, ctx, used, pick):
+    options = [t for t in sorted(ctx) if t not in used and t != pick]
+    left, right = st.columns([4, 1.2], vertical_alignment="bottom")
+    left.selectbox("Other team (a pick already made on CBS, kicked off or not)", options, index=None, placeholder="Team", key=f"ko_other_{i}")
+    right.button("Record", key=f"ko_other_btn_{i}", on_click=ko_record_other, args=(name, week, i), use_container_width=True)
+
+
+def render_ko_grid(graded, games):
+    if not graded:
+        return
+    st.markdown("<div class='leg-sub'>Season</div>", unsafe_allow_html=True)
+    for week, entry in sorted(graded.items()):
+        colour = {"won": "#00e0a4", "lost": "#f87171", "no game": "#fbbf24"}.get(entry["result"], "#9aa4b2")
+        when = kickoff_time(team_context(games, week).get(entry["team"]) or {}) if entry["result"] == "pending" else None
+        detail = entry["score"] or (fmt_kickoff(when) if when else "")
+        where = f"{'at' if entry['site'] == 'away' else 'vs'} {entry['opponent']}" if entry["opponent"] else "no game that week"
+        st.markdown(f"<div class='leg'><div>Week {week} · <b>{entry['team']}</b> {where} · <span style='color:{colour}'>{entry['result']}</span>"
+                    f" <span class='rank-num'>{detail}</span></div></div>", unsafe_allow_html=True)
+
+
+def render_ko_pool(i, name, pool, weeks, week, locked, ctx, games):
+    graded = grade_picks(pool["picks"], games)
+    status = pool_status(graded)
+    used = used_teams(pool["picks"], except_week=week)
+    pick = pool["picks"].get(week)
+    ranked = rank_candidates(weeks["weeks"], week, used, locked - {pick} if pick else locked) if week in weeks["weeks"] else []
+    with st.container(border=True):
+        alive = "<span style='color:#00e0a4'>alive</span>" if status["alive"] else f"<span style='color:#f87171'>out in week {status['week']} with {status['team']}</span>"
+        chips = "".join(f"<span class='chip'>{t}</span>" for t in sorted(used)) or "<span class='rank-num'>none yet</span>"
+        count = f"{len(pool['picks'])} pick{'' if len(pool['picks']) == 1 else 's'}"
+        st.markdown(f"<div class='leg'><div><b>{html.escape(name)}</b> · {alive} · {count}</div><div class='leg-meta'>Used in other weeks: {chips}</div></div>", unsafe_allow_html=True)
+        pick = pool["picks"].get(week)
+        if pick:
+            render_ko_current(i, name, week, pick, graded.get(week), ctx, locked, next((r for r in ranked if r["team"] == pick), None))
+        else:
+            render_ko_recommendation(i, name, ranked, week, ctx)
+        render_ko_other(i, name, week, ctx, used, pick)
+        render_ko_grid(graded, games)
+
+
+def render_ko_board(weeks, week, live, ctx, locked, note):
+    info = weeks["weeks"].get(week)
+    if not info:
+        return
+    st.markdown("<div class='sec-head'>This week's board</div>", unsafe_allow_html=True)
+    rows = []
+    for (home, away), source in info["sources"].items():
+        when = kickoff_time(ctx.get(home) or ctx.get(away) or {})
+        rows.append((when is None, when, home, away, source))
+    for unknown, when, home, away, source in sorted(rows, key=lambda r: (r[0], r[1] or datetime.min.replace(tzinfo=ET), r[3])):
+        grey = " style='color:#4d5866'" if home in locked else ""
+        st.markdown(f"<div class='leg'{grey}><div>{away} at {home} <span class='rank-num'>{'' if unknown else fmt_kickoff(when)}</span>"
+                    f" · {away} <span class='mono'>{info['p'][away]:.0%}</span> · {home} <span class='mono'>{info['p'][home]:.0%}</span>"
+                    f" <span class='rank-num'>{source}{' · locked' if home in locked else ''}</span></div></div>", unsafe_allow_html=True)
+    horizon = [w for w in weeks["weeks"] if w > week]
+    span = f"weeks {horizon[0]}-{horizon[-1]} priced by nflverse" if horizon else "no lines posted beyond this week"
+    dropped = f" · week {weeks['dropped']} and later left out (too few lines yet)" if weeks["dropped"] else ""
+    st.caption(f"This week: {len(live)} of {info['games']} games on the props pull's moneylines, the rest nflverse ({note}) · {span}{dropped}"
+               f" · locked: {', '.join(sorted(locked)) or 'nobody yet'} · the picker maximises your own chance of surviving the priced weeks;"
+               " how many pool members pick the favourite is not modelled (CBS publishes nothing). Check your pool's tie rule once: a tie counts as a loss here.")
+
+
+def render_knockout_mode():
+    st.markdown("<div class='sec-head'>Knockout</div>", unsafe_allow_html=True)
+    week = int(st.session_state.ko_week_pref or 1)
+    games, weeks, live, ctx, locked, note = knockout_inputs(week)
+    st.caption("One team to win outright each week, never the same team twice. Record here what you enter on CBS; the picks are graded from the final scores.")
+    for i, (name, pool) in enumerate(list(st.session_state.ko_pools.items())):
+        render_ko_pool(i, name, pool, weeks, week, locked, ctx, games)
+    render_ko_board(weeks, week, live, ctx, locked, note)
+
+
 if mode == "Props":
     render_props_mode()
+elif mode == "Knockout":
+    render_knockout_mode()

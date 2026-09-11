@@ -54,8 +54,9 @@ def _number(value):
 
 def parse_schedule(rows, season):
     """Regular-season games of `season`: {week, home, away, neutral, total, spread_line,
-    roof, gameday, gametime, home_score, away_score}, with Sleeper team codes. `spread_line`
-    is nflverse's (positive = home favored); the scores are None until the game is played."""
+    roof, gameday, gametime, home_score, away_score, home_moneyline, away_moneyline}, with
+    Sleeper team codes. `spread_line` is nflverse's (positive = home favored); the scores are
+    None until the game is played, the moneylines until the books post them."""
     games = []
     for row in rows:
         if row.get("game_type") != "REG" or str(row.get("season")) != str(season):
@@ -72,6 +73,8 @@ def parse_schedule(rows, season):
             "gametime": row.get("gametime"),
             "home_score": _number(row.get("home_score")),
             "away_score": _number(row.get("away_score")),
+            "home_moneyline": _number(row.get("home_moneyline")),
+            "away_moneyline": _number(row.get("away_moneyline")),
         })
     return games
 

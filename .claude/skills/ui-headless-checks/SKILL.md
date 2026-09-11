@@ -16,7 +16,7 @@ at = AppTest.from_file("draft_app.py", default_timeout=240)
 
 Drive widgets by key (`quick_entry` + `quick_taken`/`quick_mine` form buttons, `sleeper_username`, `sort_widget`, `auto_sync_widget`, `filter_RB`, `ss_adjust_widget`) or by label (`Find my leagues`, `Connect`, `Sync picks`). Set `at.session_state["auto_sync_pref"] = False` before the first run when a test injects `draft_info`, otherwise the auto-sync fragment overwrites it with the real draft.
 
-**Always** run headless sessions with `DRAFT_STATE_FILE=/path/in/scratchpad.json` and `PROJECTION_LOG_FILE=/path/in/scratchpad.jsonl` in the environment; otherwise their Mine/Taken marks and projection rows are persisted into the live app's `.draft_state.json` / `.projection_log.jsonl` and show up in the owner's browser.
+**Always** run headless sessions with `DRAFT_STATE_FILE=/path/in/scratchpad.json`, `PROJECTION_LOG_FILE=/path/in/scratchpad.jsonl`, `PROPS_LOG_FILE`, `PROPS_PULL_FILE` and `SURVIVOR_FILE` (scratch paths too) in the environment; otherwise their Mine/Taken marks, projection rows, props log, saved pull and knockout picks are persisted into the live app's `.draft_state.json` / `.projection_log.jsonl` / `.props_log.jsonl` / `.props_pull.json` / `.survivor.json` and show up in the owner's browser. `PROPS_PULL_FILE` may point at the real `.props_pull.json` read-only when a session only prices (the fetch handlers are the only writers).
 
 Gotchas learned the hard way:
 

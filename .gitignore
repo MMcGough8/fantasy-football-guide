@@ -232,3 +232,4 @@ __marimo__/
 .props_log.jsonl
 .props.json
 .props_pull.json
+.survivor.json
