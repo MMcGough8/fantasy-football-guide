@@ -83,13 +83,47 @@ def test_network_errors_are_wrapped(monkeypatch):
         fetch_projections("RB", "2026", "test-key")
 
 
-def test_retries_on_429_then_succeeds(monkeypatch, fp_sample):
+def test_a_rate_limit_fails_at_once_and_pauses_the_feed(monkeypatch, fp_sample):
+    calls = []
+
+    def limited(url, headers=None, params=None, timeout=None):
+        calls.append(params["position"])
+        return FakeResponse({}, 429)
+
+    monkeypatch.setattr(fantasypros.requests, "get", limited)
+    monkeypatch.setattr(fantasypros.time, "sleep", lambda s: (_ for _ in ()).throw(AssertionError("a 429 must not sleep")))
+    fantasypros.clear_rate_limit()
+    with pytest.raises(FantasyProsError, match="rate limit"):
+        fetch_projections("RB", "2026", "test-key")
+    assert calls == ["RB"]  # no retries
+    with pytest.raises(FantasyProsError, match="rate limit"):
+        fetch_projections("WR", "2026", "test-key")
+    assert calls == ["RB"]  # the pause holds: no request was made
+    fantasypros.clear_rate_limit()
+
+
+def test_fetch_all_stops_at_the_first_rate_limit(monkeypatch, fp_sample):
+    calls = []
+
+    def limited_after_one(url, headers=None, params=None, timeout=None):
+        calls.append(params["position"])
+        return FakeResponse(fp_sample[params["position"]]) if len(calls) == 1 else FakeResponse({}, 429)
+
+    monkeypatch.setattr(fantasypros.requests, "get", limited_after_one)
+    fantasypros.clear_rate_limit()
+    out = fetch_all("2026", "test-key")
+    assert list(out["projections"]) == ["QB"] and calls == ["QB", "RB"]  # RB tripped the limit; WR onwards were never asked
+    assert any("rate limit" in m for m in out["missing"])
+    fantasypros.clear_rate_limit()
+
+
+def test_retries_on_a_server_error_then_succeeds(monkeypatch, fp_sample):
     calls = []
 
     def flaky(url, headers=None, params=None, timeout=None):
         calls.append(params["position"])
         if len(calls) < 3:
-            return FakeResponse({}, 429)
+            return FakeResponse({}, 503)
         return FakeResponse(fp_sample[params["position"]])
 
     monkeypatch.setattr(fantasypros.requests, "get", flaky)
@@ -102,7 +136,7 @@ def test_retries_on_429_then_succeeds(monkeypatch, fp_sample):
 def test_gives_up_after_max_retries(monkeypatch):
     monkeypatch.setattr(fantasypros.requests, "get", lambda *a, **k: FakeResponse({}, 503))
     monkeypatch.setattr(fantasypros.time, "sleep", lambda s: None)
-    with pytest.raises(FantasyProsError):
+    with pytest.raises(FantasyProsError, match="503"):
         fetch_projections("RB", "2026", "test-key")
 
 

@@ -7,8 +7,11 @@ from espn_ranks import match_key
 
 BASE_URL = "https://api.fantasypros.com/public/v2/json"
 TIMEOUT_SECONDS = 20
-RETRY_DELAYS = (0.5, 1.0, 2.0)  # backoff on 429 / 5xx; the public API is rate limited
-RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+RETRY_DELAYS = (0.5, 1.0)  # backoff on a server error only
+RETRYABLE_STATUSES = {500, 502, 503, 504}
+RATE_LIMIT_STATUS = 429
+RATE_LIMIT_PAUSE_SECONDS = 60  # after a 429 every call fails at once for this long: the page degrades in a second, not a minute
+_limited_until = 0.0
 PRESEASON_WEEK = 0
 
 # Board position -> FantasyPros position id
@@ -40,17 +43,34 @@ class FantasyProsError(Exception):
     """Raised for any failure talking to FantasyPros, with a user-facing message."""
 
 
+def clear_rate_limit():
+    global _limited_until
+    _limited_until = 0.0
+
+
+def is_rate_limited(error):
+    return "rate limit" in str(error)
+
+
 def _get_with_retry(url, api_key, params):
+    """One request with a short retry on a server error. A 429 is not retried: the API stays closed
+    for a while once it says so, and each retry used to cost seconds per position, so the whole
+    feed is paused for RATE_LIMIT_PAUSE_SECONDS and every call in that window fails at once."""
+    global _limited_until
+    if time.time() < _limited_until:
+        raise FantasyProsError(f"FantasyPros rate limit: paused until {time.strftime('%H:%M:%S', time.localtime(_limited_until))}")
     attempts = len(RETRY_DELAYS) + 1
     for attempt in range(attempts):
         try:
-            resp = requests.get(
-                url, headers={"x-api-key": api_key}, params=params, timeout=TIMEOUT_SECONDS
-            )
+            resp = requests.get(url, headers={"x-api-key": api_key}, params=params, timeout=TIMEOUT_SECONDS)
+            if resp.status_code == RATE_LIMIT_STATUS:
+                _limited_until = time.time() + RATE_LIMIT_PAUSE_SECONDS
+                raise FantasyProsError(f"FantasyPros rate limit (429); paused for {RATE_LIMIT_PAUSE_SECONDS}s")
             if resp.status_code in RETRYABLE_STATUSES and attempt < attempts - 1:
                 time.sleep(RETRY_DELAYS[attempt])
                 continue
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise FantasyProsError(f"FantasyPros answered {resp.status_code}")
             return resp.json()
         except requests.RequestException as e:
             if attempt < attempts - 1:
@@ -149,10 +169,13 @@ def fetch_weekly_rankings(season, week, api_key, scoring="PPR"):
     for pos, fp_pos in FP_POSITIONS.items():
         try:
             ranks.update(_fetch_rankings(season, api_key, scoring, week, fp_pos, "weekly"))
-        except FantasyProsError:
+        except FantasyProsError as e:
             missing.append(pos)
+            if is_rate_limited(e):
+                missing.append(str(e))
+                break  # the rest would fail the same way
     if not ranks:
-        raise FantasyProsError("FantasyPros returned no weekly rankings")
+        raise FantasyProsError("FantasyPros returned no weekly rankings" + (f" ({missing[-1]})" if missing and is_rate_limited(missing[-1]) else ""))
     return {"ranks": ranks, "missing": missing}
 
 
@@ -165,8 +188,11 @@ def fetch_all(season, api_key, week=PRESEASON_WEEK):
     for pos in FP_POSITIONS:
         try:
             projections[pos] = fetch_projections(pos, season, api_key, week=week)
-        except FantasyProsError:
+        except FantasyProsError as e:
             missing.append(pos)
+            if is_rate_limited(e):
+                missing.append(str(e))
+                break  # the rest would fail the same way; stop spending seconds on it
     if not projections:
-        raise FantasyProsError("FantasyPros returned nothing for any position")
+        raise FantasyProsError("FantasyPros returned nothing for any position" + (f" ({missing[-1]})" if missing and is_rate_limited(missing[-1]) else ""))
     return {"projections": projections, "missing": missing}

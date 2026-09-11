@@ -229,6 +229,7 @@ __marimo__/
 
 # backtest and props state
 .backtest_cache/
+.feed_cache/
 .props_log.jsonl
 .props.json
 .props_pull.json

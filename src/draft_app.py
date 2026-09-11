@@ -72,6 +72,8 @@ from manual_draft import build_draft as build_manual_draft, draft_info as manual
 from opponents import demand_multipliers
 from scoring import PRESET_FALLBACK_POSITIONS, scoring_summary, unprojected_bonus_keys
 import fantasypros
+import feed_cache
+from feed_cache import slug
 from fantasypros import FantasyProsError
 import espn_projections
 from espn_projections import EspnError
@@ -234,8 +236,15 @@ def sleeper_photo(player_id):
 DEGRADED_RETRY_SECONDS = 300
 
 
-@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner=False)
-def load_fantasypros(season, retry_bucket, scoring_code):
+def _ok(result):
+    return bool(result.get("ok"))
+
+
+# Every feed loader is cached twice: in memory by Streamlit for reruns, and on disk by feed_cache
+# for the same TTL, so a restart serves the last good fetch instead of hitting every feed again.
+# Only a successful result is written; a failure is retried on the degraded cadence as before.
+
+def _fetch_fantasypros(season, scoring_code):
     key = os.getenv("FANTASYPROS_API_KEY", "").strip()
     try:
         data = fantasypros.fetch_all(season, key)
@@ -250,14 +259,24 @@ def load_fantasypros(season, retry_bucket, scoring_code):
 
 
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner=False)
-def load_espn(season, retry_bucket):
+def load_fantasypros(season, retry_bucket, scoring_code):
+    return feed_cache.cached(slug("fp", season, scoring_code), FEED_CACHE_SECONDS, lambda: _fetch_fantasypros(season, scoring_code), ok=_ok)
+
+
+def _fetch_espn(season, week=None):
     try:
-        return {"ok": True, "data": espn_projections.fetch_all(season)}
+        return {"ok": True, "data": espn_projections.fetch_all(season, week=week) if week else espn_projections.fetch_all(season)}
     except EspnError as e:
         return {"ok": False, "error": str(e)}
 
 
+@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner=False)
+def load_espn(season, retry_bucket):
+    return feed_cache.cached(slug("espn", season), FEED_CACHE_SECONDS, lambda: _fetch_espn(season), ok=_ok)
+
+
 def refresh_projections():
+    feed_cache.clear(("fp", "espn", "weekly_fp", "weekly_espn"))
     load_board.clear()
     load_fantasypros.clear()
     load_espn.clear()
@@ -372,8 +391,7 @@ def load_lineup_context(league_id, retry_bucket):
         return {"ok": False, "error": str(e)}
 
 
-@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner=False)
-def load_weekly_fantasypros(season, week, retry_bucket, scoring_code):
+def _fetch_weekly_fantasypros(season, week, scoring_code):
     key = os.getenv("FANTASYPROS_API_KEY", "").strip()
     try:
         data = fantasypros.fetch_all(season, key, week=week)
@@ -390,18 +408,20 @@ def load_weekly_fantasypros(season, week, retry_bucket, scoring_code):
 
 
 @st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner=False)
+def load_weekly_fantasypros(season, week, retry_bucket, scoring_code):
+    return feed_cache.cached(slug("weekly_fp", season, week, scoring_code), FEED_CACHE_SECONDS,
+                             lambda: _fetch_weekly_fantasypros(season, week, scoring_code), ok=_ok)
+
+
+@st.cache_data(ttl=FEED_CACHE_SECONDS, show_spinner=False)
 def load_weekly_espn(season, week, retry_bucket):
-    try:
-        return {"ok": True, "data": espn_projections.fetch_all(season, week=week)}
-    except EspnError as e:
-        return {"ok": False, "error": str(e)}
+    return feed_cache.cached(slug("weekly_espn", season, week), FEED_CACHE_SECONDS, lambda: _fetch_espn(season, week=week), ok=_ok)
 
 
 MATCHUP_CACHE_SECONDS = 6 * 3600  # nflverse refreshes lines and stats on a slow cadence
 
 
-@st.cache_data(ttl=MATCHUP_CACHE_SECONDS, show_spinner=False)
-def load_schedule(season, retry_bucket):
+def _fetch_schedule(season):
     try:
         return {"ok": True, "data": fetch_schedule(season)}
     except MatchupError as e:
@@ -409,7 +429,17 @@ def load_schedule(season, retry_bucket):
 
 
 @st.cache_data(ttl=MATCHUP_CACHE_SECONDS, show_spinner=False)
-def load_dvp(season, retry_bucket):
+def load_schedule(season, retry_bucket):
+    return feed_cache.cached(slug("schedule", season), MATCHUP_CACHE_SECONDS, lambda: _fetch_schedule(season), ok=_ok)
+
+
+def refresh_schedule():
+    """A fresh nflverse schedule (scores and new lines land overnight); no credits involved."""
+    feed_cache.clear(("schedule",))
+    load_schedule.clear()
+
+
+def _fetch_dvp(season):
     """Last season's points-allowed-by-position as the prior, this season blended in as it lands."""
     try:
         prior = factors(allowed_per_game(fetch_player_weeks(str(int(season) - 1))))
@@ -423,14 +453,15 @@ def load_dvp(season, retry_bucket):
     return {"ok": True, "data": blend_seasons(prior, current), "note": note}
 
 
+@st.cache_data(ttl=MATCHUP_CACHE_SECONDS, show_spinner=False)
+def load_dvp(season, retry_bucket):
+    return feed_cache.cached(slug("dvp", season), MATCHUP_CACHE_SECONDS, lambda: _fetch_dvp(season), ok=_ok)
+
+
 ODDS_CACHE_SECONDS = 6 * 3600  # 4 fetches a day x 2 credits = ~240 of the free tier's 500 a month
 
 
-@st.cache_data(ttl=ODDS_CACHE_SECONDS, show_spinner=False)
-def load_live_odds(retry_bucket):
-    """Game-day lines keyed by (home, away) from The Odds API. Never raises: a refused
-    call (bad key, quota) is cached like a result so it is not retried every rerun.
-    Always called with bucket 0; the projection feeds' retry cadence would burn credits."""
+def _fetch_live_odds():
     key = os.getenv("ODDS_API_KEY", "").strip()
     if not key:
         return {"ok": False, "error": "set ODDS_API_KEY for game-day lines"}
@@ -440,6 +471,15 @@ def load_live_odds(retry_bucket):
         return {"ok": False, "error": str(e)}
     parsed = parse_events(result["events"])
     return {"ok": True, "data": parsed["lines"], "remaining": result["remaining"], "missing": parsed["missing"]}
+
+
+@st.cache_data(ttl=ODDS_CACHE_SECONDS, show_spinner=False)
+def load_live_odds(retry_bucket):
+    """Game-day lines keyed by (home, away) from The Odds API. Never raises: a refused
+    call (bad key, quota) is cached like a result so it is not retried every rerun.
+    Always called with bucket 0; the projection feeds' retry cadence would burn credits.
+    The disk copy means a restart inside the six hours costs no credits either."""
+    return feed_cache.cached(slug("odds"), ODDS_CACHE_SECONDS, _fetch_live_odds, ok=_ok)
 
 
 TRENDING_CACHE_SECONDS = 3600
@@ -500,9 +540,7 @@ PROPS_PULL_FILE = os.getenv("PROPS_PULL_FILE") or os.path.join(os.path.dirname(o
 PROP_SCORING = (("pass_yd", 0.04), ("pass_td", 4), ("pass_int", -1), ("rush_yd", 0.1), ("rush_td", 6), ("rec", 1), ("rec_yd", 0.1), ("rec_td", 6), ("fum_lost", -2))
 
 
-@st.cache_data(ttl=EVENTS_CACHE_SECONDS, show_spinner=False)
-def load_events(retry_bucket):
-    """The season's listed games from The Odds API (a free call); its headers say how many credits are left."""
+def _fetch_events():
     key = os.getenv("ODDS_API_KEY", "").strip()
     if not key:
         return {"ok": False, "error": "set ODDS_API_KEY to fetch props"}
@@ -511,6 +549,12 @@ def load_events(retry_bucket):
     except OddsError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "data": result["events"], "remaining": result["remaining"]}
+
+
+@st.cache_data(ttl=EVENTS_CACHE_SECONDS, show_spinner=False)
+def load_events(retry_bucket):
+    """The season's listed games from The Odds API (a free call); its headers say how many credits are left."""
+    return feed_cache.cached(slug("events"), EVENTS_CACHE_SECONDS, _fetch_events, ok=_ok)
 
 
 def week_prop_events(week):
@@ -1342,7 +1386,7 @@ with st.sidebar:
             drop.button("Drop", key=f"ko_drop_{i}", on_click=ko_remove_pool, args=(name,), help="Deletes the pool and its picks", use_container_width=True)
         st.text_input("New pool", key="ko_add_widget", placeholder="Pool name")
         st.button("Add pool", on_click=ko_add, use_container_width=True)
-        st.button("Refresh schedule and scores", on_click=load_schedule.clear, use_container_width=True,
+        st.button("Refresh schedule and scores", on_click=refresh_schedule, use_container_width=True,
                   help="nflverse posts scores and new lines overnight; this refetches the schedule (no credits)")
         if st.session_state.ko_note:
             st.warning(st.session_state.ko_note)
